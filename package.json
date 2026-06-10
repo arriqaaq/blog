@@ -1,0 +1,12 @@
+{
+  "name": "arriqaaq-blog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build-log blog — Markdown-authored, bespoke static build with interactive widgets.",
+  "scripts": {
+    "build": "node build/build.js"
+  },
+  "dependencies": {
+    "marked": "^12.0.0"
+  }
+}

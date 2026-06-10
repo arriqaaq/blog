@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en" data-mode="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>arriqaaq</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet"><style>
+  :root{color-scheme:light dark}html[data-mode=dark]{background:#14151a;color:#e6e8ec}html[data-mode=light]{background:#fbfbfc;color:#1f2430}
+  body{font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;max-width:740px;margin:3rem auto;padding:0 1rem;line-height:1.65}
+  h1{font-size:1.8rem;margin:0 0 .3rem}.sub{opacity:.65;margin:0 0 1.5rem}
+  h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.1em;opacity:.6;margin-top:2.2rem}
+  ul{list-style:none;padding:0}li{border:1px solid rgba(127,127,127,.25);border-radius:10px;padding:.85rem 1.05rem;margin-bottom:.65rem}
+  li:has(a.post){background:rgba(124,58,237,.06);border-color:rgba(127,127,127,.3)}
+  a{color:#7c3aed;font-weight:700;text-decoration:none}a:hover{text-decoration:underline}
+  .post b{font-size:1.15rem}.pe{font:600 .66rem/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#7c3aed;opacity:.85;margin-bottom:.35rem}
+  .d{font-size:.9rem;opacity:.72;margin-top:.25rem;color:inherit;font-weight:400}.m{font-size:.78rem;opacity:.6;margin-top:.4rem;color:inherit;font-weight:400}
+  button#theme{font:inherit;cursor:pointer;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;border-radius:7px;padding:.3rem .6rem;margin-bottom:1.3rem}</style></head>
+<body><h1>arriqaaq</h1><p class="sub">Build logs and notes on distributed systems — deterministic simulation, databases, and the guts underneath.</p>
+<button id="theme">light / dark</button>
+<h2>Posts</h2><ul>
+    <li><a class="post" href="posts/the-seed-contract.html">
+      <div class="pe">Deterministic Simulation Testing</div><b>The Seed Contract →</b>
+      <div class="d">Building a deterministic simulation tester.</div>
+      <div class="m">~5,507 words · 22 interactive widgets · 7 diagrams</div></a></li>
+</ul>
+<h2>Interactive widgets</h2><ul>
+    <li><a href="widgets/tick-loop.html">The tick loop →</a><div class="d">one discrete heartbeat</div></li>
+    <li><a href="widgets/partition-hold.html">Partition vs hold →</a><div class="d">drop vs buffer-and-release</div></li>
+    <li><a href="widgets/same-seed-replay.html">Same-seed replay →</a><div class="d">one seed, one universe</div></li>
+    <li><a href="widgets/paused-clock.html">Paused per-node clock →</a><div class="d">time jumps, it does not flow</div></li>
+    <li><a href="widgets/packet-heap.html">In-flight packet heap →</a><div class="d">earliest-deadline-first</div></li>
+    <li><a href="widgets/os-hooks.html">OS-hook interposition →</a><div class="d">one syscall, two destinations</div></li>
+    <li><a href="widgets/four-layers.html">Four layers of determinism →</a><div class="d">each tier catches one source of chaos</div></li>
+    <li><a href="widgets/packet-admission.html">Packet admission →</a><div class="d">drop, hold, or schedule</div></li>
+    <li><a href="widgets/tokio-runtime.html">Tokio: paused time + ticks →</a><div class="d">time only moves when we tick it</div></li>
+    <li><a href="widgets/turmoil-step.html">The single-threaded step loop →</a><div class="d">one thread, one host at a time</div></li>
+    <li><a href="widgets/rolling-clog.html">RollingNetworkClog →</a><div class="d">the swizzle-clog wave clears out of order</div></li>
+    <li><a href="widgets/sim-cluster.html">Whole system, one process →</a><div class="d">nodes, network, clock, RNG — all under one driver</div></li>
+    <li><a href="widgets/clock-handoff.html">The driver drives the clock →</a><div class="d">advance, then leap to the next deadline</div></li>
+    <li><a href="widgets/select-seed.html">Seeded select! ordering →</a><div class="d">same seed, same branch, same race</div></li>
+    <li><a href="widgets/clock-recursion.html">The clock_gettime recursion →</a><div class="d">the bug that forced our own framework</div></li>
+    <li><a href="widgets/transport-swap.html">Swapping the transport →</a><div class="d">prod UDP vs simulated UdpSocket — same replica code</div></li>
+    <li><a href="widgets/pure-function.html">Pure → impure → seeded →</a><div class="d">same input, same output — until a hidden clock leaks in</div></li>
+    <li><a href="widgets/work-stealing.html">Work-stealing vs one thread →</a><div class="d">two ready tasks race in prod; one thread does not</div></li>
+    <li><a href="widgets/timer-wheel.html">The hashed timing wheel →</a><div class="d">six levels; deadlines cascade, idle gaps skip</div></li>
+    <li><a href="widgets/two-clocks.html">Two clocks: private vs shared →</a><div class="d">node Tokio time vs TickContext::elapsed</div></li>
+    <li><a href="widgets/tapir-commit.html">TAPIR: one-round-trip commit →</a><div class="d">supermajority agrees, no leader</div></li>
+    <li><a href="widgets/host-client-lifetime.html">Hosts vs clients →</a><div class="d">crashable & pending forever vs ends the run</div></li>
+</ul>
+<script>document.getElementById('theme').addEventListener('click',function(){var h=document.documentElement;h.setAttribute('data-mode',h.getAttribute('data-mode')==='dark'?'light':'dark');});</script></body></html>
