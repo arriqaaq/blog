@@ -8,6 +8,6 @@
 <body><h1>The single-threaded step loop</h1><p class="sub">one thread, one host at a time</p>
 <div class="tb"><a href="../index.html">← all widgets</a><button id="theme">light / dark</button></div>
 <div id="dst-w"></div>
-<script src="../assets/vendor/anime.min.js"></script><script src="../assets/js/dst/dst-kit.js"></script><script src="../assets/js/dst/turmoil-step.js"></script>
-<script>(function(){function go(){if(window.DSTTurmoilStep)DSTTurmoilStep.init('dst-w');}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();document.getElementById('theme').addEventListener('click',function(){var h=document.documentElement;h.setAttribute('data-mode',h.getAttribute('data-mode')==='dark'?'light':'dark');});})();</script>
+<script src="../assets/vendor/anime.min.js"></script><script src="../assets/js/dst/dst-kit.js"></script><script src="../assets/js/dst/step-loop.js"></script>
+<script>(function(){function go(){if(window.DSTStepLoop)DSTStepLoop.init('dst-w');}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();document.getElementById('theme').addEventListener('click',function(){var h=document.documentElement;h.setAttribute('data-mode',h.getAttribute('data-mode')==='dark'?'light':'dark');});})();</script>
 </body></html>

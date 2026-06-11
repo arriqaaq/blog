@@ -51,11 +51,11 @@
   <div class="eyebrow">Deterministic Simulation Testing</div>
   <h1>The Seed Contract</h1>
   <p class="dek">Building a deterministic simulation tester.</p>
-  <p class="byline">A build log on dst — a from-scratch DST runtime, standing on Tokio, Turmoil, madsim, and FoundationDB. ~5,507 words · 22 interactive widgets · 7 diagrams</p>
+  <p class="byline">A build log on dst — a from-scratch DST runtime, standing on Tokio, Turmoil, madsim, and FoundationDB. ~5,395 words · 22 interactive widgets · 4 diagrams</p>
 </header>
 <nav class="toc"><h2>Contents</h2><ol>
 <li><span class="toc-n">01</span><a href="#what-is-dst">What deterministic simulation testing actually is</a></li>
-<li><span class="toc-n">02</span><a href="#tokio-tick">Building upon Tokio: how DST advances virtual time</a></li>
+<li><span class="toc-n">02</span><a href="#tokio-tick">Building upon Tokio: how to advances time</a></li>
 <li><span class="toc-n">03</span><a href="#dst-project">Anatomy of the framework: four layers over a seed</a></li>
 <li><span class="toc-n">04</span><a href="#testing-tapir">Using it inside enterprise to test TAPIR</a></li>
 <li><span class="toc-n">05</span><a href="#references">References</a></li>
@@ -75,11 +75,8 @@
           <text x="461.79999999999995" y="184.39999999999998" text-anchor="end" font-size="11" font-weight="500" fill="currentColor" opacity="0.82">Formal methods</text><circle cx="491.4" cy="76.4" r="8" fill="#7c3aed" filter="url(#dgm-glow)"/>
           <text x="481.4" y="80.4" text-anchor="end" font-size="12.5" font-weight="700" fill="#7c3aed" opacity="1">DST</text></svg><figcaption>Where DST sits: systematic, fast, and reproducible</figcaption></figure>
 
-<p>The rest of this blog documents my learning of how DST works in real systems. I&#39;ve also been building a DST library from scratch to understand the underlying ideas from first principles.</p>
+<p>The rest of this blog documents my learning of how DST works in real systems. I&#39;ve also been building a <a href="https://github.com/arriqaaq/dst">DST</a> library from scratch to understand the underlying ideas from first principles.</p>
 <p>Along the way, I&#39;ve also used it to test parts of our distributed platform. That said, if you&#39;re looking for a more mature and production-proven ecosystem, I highly recommend checking out turmoil and madsim. Much of my own work is heavily inspired by turmoil, and many of the ideas presented here build on its concepts.</p>
-
-<figure class="fig fig-dgm"><svg class="dgm-svg" viewBox="0 0 720 150" xmlns="http://www.w3.org/2000/svg"><defs><marker id="m-green" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#16a34a"/></marker><marker id="m-blue" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#2563eb"/></marker><marker id="m-purple" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#7c3aed"/></marker><marker id="m-amber" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#d97706"/></marker><marker id="m-red" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#dc2626"/></marker><marker id="m-pink" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#db2777"/></marker><marker id="m-gray" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#64748b"/></marker></defs><rect x="20" y="40" width="180" height="78" rx="9" fill="#2563eb20" stroke="#2563eb" stroke-width="1.6"/><text x="110" y="60" text-anchor="middle" font-size="13" font-weight="700" fill="#2563eb">FoundationDB</text><text x="110" y="78" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">built the simulator</text><text x="110" y="93" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">before the database</text><rect x="270" y="40" width="180" height="78" rx="9" fill="#16a34a20" stroke="#16a34a" stroke-width="1.6"/><text x="360" y="60" text-anchor="middle" font-size="13" font-weight="700" fill="#16a34a">Turmoil + madsim</text><text x="360" y="78" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">host/client + paused</text><text x="360" y="93" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">clock; libc interposition</text><rect x="520" y="40" width="180" height="78" rx="9" fill="#7c3aed20" stroke="#7c3aed" stroke-width="1.6"/><text x="610" y="60" text-anchor="middle" font-size="13" font-weight="700" fill="#7c3aed">dst</text><text x="610" y="78" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">rebuilt from scratch</text><text x="610" y="93" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">to learn the fundamentals</text><line x1="200" y1="79" x2="268" y2="79" stroke="#2563eb" stroke-width="1.8" marker-end="url(#m-blue)"/><line x1="450" y1="79" x2="518" y2="79" stroke="#16a34a" stroke-width="1.8" marker-end="url(#m-green)"/><text x="235" y="70" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.6">read</text><text x="485" y="70" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.6">borrowed</text></svg><figcaption>The lineage we read our way into</figcaption></figure>
-
 
 </section>
 
@@ -142,9 +139,6 @@ fn replays_forever() {
 <p>Computers are deterministic machines. Given the same inputs, they&#39;ll produce the same outputs every time. So when a program asks for a &quot;random&quot; number, it&#39;s usually getting one from a deterministic algorithm called a pseudo-random number generator.</p>
 <p>A PRNG keeps some internal state and uses it to generate the next number in a sequence. Start it with the same seed and you&#39;ll get the exact same sequence every time. The numbers may look random, but they&#39;re completely reproducible—which turns out to be exactly what DST wants.</p>
 <p>A <em>seed</em>, then, is just the starting point for that sequence. A single u64 determines an entire stream of seemingly random choices.</p>
-
-<figure class="fig fig-dgm"><svg class="dgm-svg" viewBox="0 0 720 210" xmlns="http://www.w3.org/2000/svg"><defs><marker id="m-green" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#16a34a"/></marker><marker id="m-blue" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#2563eb"/></marker><marker id="m-purple" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#7c3aed"/></marker><marker id="m-amber" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#d97706"/></marker><marker id="m-red" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#dc2626"/></marker><marker id="m-pink" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#db2777"/></marker><marker id="m-gray" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#64748b"/></marker></defs><rect x="20" y="24" width="120" height="60" rx="9" fill="#d9770620" stroke="#d97706" stroke-width="1.6"/><text x="80" y="44" text-anchor="middle" font-size="13" font-weight="700" fill="#d97706">seed : u64</text><text x="80" y="62" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">e.g. 42</text><rect x="190" y="14" width="230" height="56" rx="9" fill="#7c3aed20" stroke="#7c3aed" stroke-width="1.6"/><text x="305" y="34" text-anchor="middle" font-size="13" font-weight="700" fill="#7c3aed">SHA-256</text><text x="305" y="52" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">b"…Prng::v1" ++ seed_le</text><rect x="470" y="14" width="230" height="56" rx="9" fill="#16a34a20" stroke="#16a34a" stroke-width="1.6"/><text x="585" y="34" text-anchor="middle" font-size="13" font-weight="700" fill="#16a34a">ChaCha8Rng</text><text x="585" y="52" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">master stream</text><rect x="190" y="120" width="230" height="56" rx="9" fill="#7c3aed20" stroke="#7c3aed" stroke-width="1.6"/><text x="305" y="140" text-anchor="middle" font-size="13" font-weight="700" fill="#7c3aed">SHA-256</text><text x="305" y="158" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">…derive_stream::v1 ++ salt</text><rect x="470" y="120" width="230" height="56" rx="9" fill="#2563eb20" stroke="#2563eb" stroke-width="1.6"/><text x="585" y="140" text-anchor="middle" font-size="13" font-weight="700" fill="#2563eb">ChaCha8Rng</text><text x="585" y="158" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">independent child stream</text><line x1="140" y1="48" x2="188" y2="42" stroke="#d97706" stroke-width="1.8" marker-end="url(#m-amber)"/><line x1="420" y1="42" x2="468" y2="42" stroke="#7c3aed" stroke-width="1.8" marker-end="url(#m-purple)"/><line x1="140" y1="60" x2="188" y2="148" stroke="#d97706" stroke-width="1.8" marker-end="url(#m-amber)"/><line x1="420" y1="148" x2="468" y2="148" stroke="#7c3aed" stroke-width="1.8" marker-end="url(#m-purple)"/><text x="360" y="100" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.6">domain prefix ⇒ no accidental correlation between streams</text></svg><figcaption>A seed fans out: SHA-256 domain separation → ChaCha8</figcaption></figure>
-
 <p>The important thing to understand is that the seed is only one piece of the puzzle. A DST engine is deterministic because it takes control of the things that are normally left up to the operating system: packet delivery order, timer execution, task scheduling, network faults, and so on. Once those decisions are made by the simulator instead of the outside world, the execution becomes reproducible.</p>
 <pre><code class="language-rust">DST_SEED=&lt;n&gt; cargo test &lt;name&gt;
 </code></pre>
@@ -191,7 +185,7 @@ fn replays_forever() {
 <li>all scheduling decisions are made explicitly per tick</li>
 </ul>
 <p>In many implementations, this loop runs on a single thread because it makes it easier to enforce a strict and reproducible ordering of events. Some systems also use sandboxed runtimes like WebAssembly to isolate user code and further reduce accidental sources of nondeterminism from the host environment.</p>
-<h3 id="one-process">Collapsing the system into one process</h3>
+<h3 id="one-process">Running the system in one process</h3>
 <p>Once all nondeterministic channels are identified, they only become controllable if they live inside the same process as the seed.</p>
 <p>That leads to the central design choice:</p>
 <blockquote>
@@ -217,22 +211,9 @@ fn replays_forever() {
 </section>
 
 <section class="sec">
-<h2 id="tokio-tick">Building upon Tokio: how DST advances virtual time</h2>
+<h2 id="tokio-tick">Building upon Tokio: how to advances time</h2>
 <p>The previous sections reduced deterministic simulation to a heartbeat: deliver due messages, choose which tasks run, advance virtual time, and record what happened. That loop is easy to draw. The harder part is making ordinary async Rust code obey it without asking every application to rewrite its timers, retries, heartbeats, and timeouts from scratch.</p>
-<p>This is where DST leans on Tokio instead of replacing it. Madsim rebuilds the async runtime from first principles. Turmoil and DST take the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.</p>
-
-<figure class="fig fig-dgm"><div class="cmp-wrap"><table class="cmp"><thead><tr><th>Approach</th><th>Integration cost</th><th>Determinism</th><th>Teaches the fundamentals</th></tr></thead><tbody>
-      <tr><td>FoundationDB / Flow</td><td>rewrite in a custom language</td><td>total</td><td>—</td></tr>
-      <tr><td>madsim</td><td><code>--cfg madsim</code> + Cargo <code>[patch]</code> swaps</td><td>high (patched deps only)</td><td>some</td></tr>
-      <tr><td>Turmoil</td><td>low, but network-only</td><td>partial — leaks via <code>std::time</code> / syscalls</td><td>some</td></tr>
-      <tr><td>Antithesis</td><td>package into Docker, pay</td><td>total (hypervisor)</td><td>no</td></tr>
-      <tr><td><strong>from scratch (this)</strong></td><td>build it yourself</td><td>high, with known boundaries</td><td>that was the point</td></tr>
-      </tbody></table></div><figcaption>DST on the build-vs-buy curve</figcaption></figure>
-
-<p>The useful mental model is this:</p>
-<blockquote>
-<p>A node writes normal Tokio code. The simulator decides when that node&#39;s Tokio runtime is allowed to make progress.</p>
-</blockquote>
+<p>This is where we lean on Tokio instead of replacing it. Madsim rebuilds the async runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.</p>
 <h3 id="the-node-runtime">The runtime each node gets</h3>
 <p>Every simulated host or client gets its own <code>NodeRuntime</code>. That runtime is current-thread, time-enabled, and started with Tokio time paused:</p>
 <pre><code class="language-rust">fn build_runtime(sim_seed: u64, node_name: &amp;str) -&gt; Result&lt;Runtime, Error&gt; {
@@ -350,8 +331,8 @@ fn replays_forever() {
 </code></pre>
 <p>The order is part of the model. At the beginning of a step, DST delivers every packet whose scheduled delivery time is <code>&lt;= ctx.elapsed</code>. It then chooses the non-crashed nodes to run. By default, that order is <code>IndexMap</code> insertion order. If <code>random_node_order</code> is enabled, the node list is shuffled with the simulation PRNG, so the schedule changes across seeds but replays for a fixed seed.</p>
 
-<figure class="fig"><div class="dst-mount" id="w-turmoil-step-1"></div>
-  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/turmoil-step.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
+<figure class="fig"><div class="dst-mount" id="w-step-loop-1"></div>
+  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/step-loop.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
 <p>Each node is activated through <code>TickContext::activate</code>, which installs the simulation context in scoped thread-local storage. That is why <code>UdpSocket::bind</code>, <code>UdpSocket::send_to</code>, and the optional clock hooks can tell which node is currently executing. While the node is active, DST calls <code>rt.tick(sim_tick)</code>. Only after every live node has been stepped does the harness advance <code>ctx.elapsed += sim_tick</code>.</p>
 <p>This makes network delivery step-granular. <code>UdpSocket::send_to</code> stamps a packet with the current <code>ctx.elapsed</code>. The network computes <code>deliver_at = now + latency + extra_delay</code>, stores packets in a min-heap keyed by <code>(deliver_at, seq)</code>, and delivers due packets at the start of later steps. A packet sent midway through a node&#39;s Tokio tick is still stamped with the simulation step time, not with a separate intra-node Tokio timestamp.</p>
@@ -640,12 +621,12 @@ struct FaultProfile {
 <script src="../assets/js/dst/same-seed-replay.js"></script>
 <script src="../assets/js/dst/select-seed.js"></script>
 <script src="../assets/js/dst/sim-cluster.js"></script>
+<script src="../assets/js/dst/step-loop.js"></script>
 <script src="../assets/js/dst/tapir-commit.js"></script>
 <script src="../assets/js/dst/tick-loop.js"></script>
 <script src="../assets/js/dst/timer-wheel.js"></script>
 <script src="../assets/js/dst/tokio-runtime.js"></script>
 <script src="../assets/js/dst/transport-swap.js"></script>
-<script src="../assets/js/dst/turmoil-step.js"></script>
 <script src="../assets/js/dst/two-clocks.js"></script>
 <script src="../assets/js/dst/work-stealing.js"></script>
 <script>
@@ -658,7 +639,7 @@ struct FaultProfile {
     try { if(window.DSTPausedClock) DSTPausedClock.init('w-paused-clock-1'); } catch (e) { console.error('paused-clock (w-paused-clock-1) failed:', e); }
     try { if(window.DSTTimerWheel) DSTTimerWheel.init('w-timer-wheel-1'); } catch (e) { console.error('timer-wheel (w-timer-wheel-1) failed:', e); }
     try { if(window.DSTClockHandoff) DSTClockHandoff.init('w-clock-handoff-1'); } catch (e) { console.error('clock-handoff (w-clock-handoff-1) failed:', e); }
-    try { if(window.DSTTurmoilStep) DSTTurmoilStep.init('w-turmoil-step-1'); } catch (e) { console.error('turmoil-step (w-turmoil-step-1) failed:', e); }
+    try { if(window.DSTStepLoop) DSTStepLoop.init('w-step-loop-1'); } catch (e) { console.error('step-loop (w-step-loop-1) failed:', e); }
     try { if(window.DSTTwoClocks) DSTTwoClocks.init('w-two-clocks-1'); } catch (e) { console.error('two-clocks (w-two-clocks-1) failed:', e); }
     try { if(window.DSTWorkStealing) DSTWorkStealing.init('w-work-stealing-1'); } catch (e) { console.error('work-stealing (w-work-stealing-1) failed:', e); }
     try { if(window.DSTSelectSeed) DSTSelectSeed.init('w-select-seed-1'); } catch (e) { console.error('select-seed (w-select-seed-1) failed:', e); }

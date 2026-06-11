@@ -48,7 +48,7 @@ module.exports = {
     type: 'svg',
     body: svg('0 0 720 150',
       box(20, 40, 180, 78, C.blue, 'FoundationDB', ['built the simulator', 'before the database']) +
-      box(270, 40, 180, 78, C.green, 'Turmoil + madsim', ['host/client + paused', 'clock; libc interposition']) +
+      box(270, 40, 180, 78, C.green, 'madsim', ['async runtime +', 'libc interposition']) +
       box(520, 40, 180, 78, C.purple, 'dst', ['rebuilt from scratch', 'to learn the fundamentals']) +
       arrow(200, 79, 268, 79, 'blue') + arrow(450, 79, 518, 79, 'green') +
       label(235, 70, 'read', 'middle', 0.6) + label(485, 70, 'borrowed', 'middle', 0.6)),
@@ -72,13 +72,12 @@ module.exports = {
     title: 'What we took from whom',
     type: 'svg',
     body: svg('0 0 720 250',
-      box(20, 18, 200, 64, C.green, 'Tokio', ['paused clock + LocalSet']) +
-      box(20, 100, 200, 64, C.blue, 'Turmoil', ['host/client + step loop']) +
-      box(20, 182, 200, 64, C.amber, 'madsim', ['libc interposition']) +
+      box(20, 50, 200, 64, C.green, 'Tokio', ['paused clock + LocalSet']) +
+      box(20, 150, 200, 64, C.amber, 'madsim', ['libc interposition']) +
       box(500, 100, 200, 64, C.pink, 'FoundationDB', ['swizzle-clog + sim-first']) +
       box(290, 90, 140, 84, C.purple, 'dst', ['our core']) +
-      arrow(220, 50, 288, 110, 'green') + arrow(220, 132, 288, 132, 'blue') +
-      arrow(220, 214, 288, 154, 'amber') + arrow(500, 132, 432, 132, 'pink')),
+      arrow(220, 82, 288, 120, 'green') + arrow(220, 182, 288, 150, 'amber') +
+      arrow(500, 132, 432, 132, 'pink')),
   },
 
   'safety-liveness': {
@@ -116,7 +115,6 @@ module.exports = {
     body: `<table class="cmp"><thead><tr><th>Approach</th><th>Integration cost</th><th>Determinism</th><th>Teaches the fundamentals</th></tr></thead><tbody>
       <tr><td>FoundationDB / Flow</td><td>rewrite in a custom language</td><td>total</td><td>—</td></tr>
       <tr><td>madsim</td><td><code>--cfg madsim</code> + Cargo <code>[patch]</code> swaps</td><td>high (patched deps only)</td><td>some</td></tr>
-      <tr><td>Turmoil</td><td>low, but network-only</td><td>partial — leaks via <code>std::time</code> / syscalls</td><td>some</td></tr>
       <tr><td>Antithesis</td><td>package into Docker, pay</td><td>total (hypervisor)</td><td>no</td></tr>
       <tr><td><strong>from scratch (this)</strong></td><td>build it yourself</td><td>high, with known boundaries</td><td>that was the point</td></tr>
       </tbody></table>`,

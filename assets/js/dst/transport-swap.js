@@ -3,7 +3,7 @@
  *
  * The same TAPIR replica / ClusterBus code is generic over `impl Transport`. In prod the slot is
  * filled by tokio::net::UdpSocket over a chaotic wire (jittery, can reorder, can lose). In tests it
- * is filled by TurmoilTransport wrapping dst::UdpSocket on the driver-scheduled backplane
+ * is filled by SimTransport wrapping dst::UdpSocket on the driver-scheduled backplane
  * (ordered min-heap, partitionable). The replica is untouched; only the trait object behind the
  * seam changes. All randomness is seeded ⇒ same seed, same run. Partition (sim only) drops messages
  * between n0 and n2.
@@ -30,7 +30,7 @@
 fn run_replica<T: Transport>(bus: ClusterBus<T>) { /* ... */ }
 
 let bus = if cfg!(sim) {
-    ClusterBus::new(TurmoilTransport::new())  // dst::UdpSocket
+    ClusterBus::new(SimTransport::new())  // dst::UdpSocket
 } else {
     ClusterBus::new(tokio::net::UdpSocket::bind(addr)?)
 };`;
@@ -63,7 +63,7 @@ let bus = if cfg!(sim) {
         <span class="dstk-tdiv"></span>
         <div class="dstk-tgroup"><span class="dstk-tlabel">transport</span>
           <button class="dstk-btn dstk-btn--blue t-prod">prod: UdpSocket</button>
-          <button class="dstk-btn dstk-btn--purple t-sim">sim: Turmoil</button></div>
+          <button class="dstk-btn dstk-btn--purple t-sim">sim: dst</button></div>
         <span class="dstk-tdiv"></span>
         <button class="dstk-btn dstk-btn--red t-part">✂ Partition n0⇿n2</button>
         <span class="dstk-sp"></span>
@@ -102,9 +102,9 @@ let bus = if cfg!(sim) {
 
       // the seam: a bound slot "impl Transport" — only this changes between prod and sim
       K.el('rect', { x: SLOT.x, y: SLOT.y, width: SLOT.w, height: SLOT.h, rx: 7, fill: K.grad(uid, sim ? 'purple' : 'blue'), stroke: tColor, 'stroke-width': 1.8, 'stroke-dasharray': '5,3' }, content);
-      T(content, SLOT.x + SLOT.w / 2, SLOT.y + 19, tColor, 11.5, 700, 'middle').textContent = sim ? 'impl Transport = Turmoil' : 'impl Transport = UdpSocket';
+      T(content, SLOT.x + SLOT.w / 2, SLOT.y + 19, tColor, 11.5, 700, 'middle').textContent = sim ? 'impl Transport = SimTransport' : 'impl Transport = UdpSocket';
       T(content, W / 2, SLOT.y + SLOT.h + 22, c.muted, 10.5, 400, 'middle').textContent = sim
-        ? 'TurmoilTransport → dst::UdpSocket · driver-scheduled · ordered · partitionable'
+        ? 'SimTransport → dst::UdpSocket · driver-scheduled · ordered · partitionable'
         : 'tokio::net::UdpSocket → real wire · jittery · can reorder · can lose';
 
       // backplane visual: prod = chaotic wire; sim = ordered heap
@@ -250,7 +250,7 @@ let bus = if cfg!(sim) {
       st.mode = mode; st.heap = [];
       if (mode === 'prod') st.partitioned = false; // a real wire can't be cleanly partitioned by the driver
       K.addLog(logBody, mode === 'sim'
-        ? 'swap seam → TurmoilTransport (driver-scheduled, ordered, partitionable)'
+        ? 'swap seam → SimTransport (driver-scheduled, ordered, partitionable)'
         : 'swap seam → tokio::net::UdpSocket (real wire — replica code unchanged)', 'hl');
       drawScene(); render(); refreshButtons();
     }

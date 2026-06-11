@@ -2,7 +2,7 @@
  * DST clock_gettime recursion (re-skinned via dst-kit) — the bug that forced our own framework.
  *
  * Our test hook intercepts clock_gettime so paused sim time is what the runtime sees. The buggy
- * guard asked "are we inside the sim?" via turmoil::sim_elapsed(), which itself reads the host
+ * guard asked "are we inside the sim?" via sim_elapsed(), which itself reads the host
  * timer → tokio Instant::now() → std Instant::now() → clock_gettime → our hook → … unbounded
  * recursion that blows the stack the moment a crash/bounce probes the clock. The one-line fix swaps
  * the guard to tokio::runtime::Handle::try_current().is_ok(): a TLS-only check that never reads a
@@ -23,7 +23,7 @@
   // The recursion cycle: clock_gettime → sim_elapsed → try_current_host → timer → tokio → std → back
   const CYCLE = [
     { fn: 'clock_gettime (our hook)', zone: 'amber' },
-    { fn: 'turmoil::sim_elapsed()', zone: 'purple' },
+    { fn: 'sim_elapsed()', zone: 'purple' },
     { fn: 'World::try_current_host()', zone: 'purple' },
     { fn: 'host.timer.sim_elapsed()', zone: 'blue' },
     { fn: 'tokio Instant::now()', zone: 'blue' },
@@ -32,7 +32,7 @@
 
   const SNIP_BUG = `fn clock_gettime(..) -> i64 {
     // "are we inside the sim?" — but this READS the clock
-    if turmoil::sim_elapsed().is_some() {   // ← recurses
+    if sim_elapsed().is_some() {   // ← recurses
         return sim_now();
     }
     real_clock_gettime(..)

@@ -13,11 +13,9 @@ Deterministic Simulation Testing (DST) is an interesting approach to addressing 
 
 [[SVG:coverage]]
 
-The rest of this blog documents my learning of how DST works in real systems. I've also been building a DST library from scratch to understand the underlying ideas from first principles.
+The rest of this blog documents my learning of how DST works in real systems. I've also been building a [DST](https://github.com/arriqaaq/dst) library from scratch to understand the underlying ideas from first principles.
 
 Along the way, I've also used it to test parts of our distributed platform. That said, if you're looking for a more mature and production-proven ecosystem, I highly recommend checking out turmoil and madsim. Much of my own work is heavily inspired by turmoil, and many of the ideas presented here build on its concepts.
-
-[[SVG:lineage]]
 
 ## What deterministic simulation testing actually is {#what-is-dst}
 
@@ -97,8 +95,6 @@ A PRNG keeps some internal state and uses it to generate the next number in a se
 
 A *seed*, then, is just the starting point for that sequence. A single u64 determines an entire stream of seemingly random choices.
 
-[[SVG:prng]]
-
 The important thing to understand is that the seed is only one piece of the puzzle. A DST engine is deterministic because it takes control of the things that are normally left up to the operating system: packet delivery order, timer execution, task scheduling, network faults, and so on. Once those decisions are made by the simulator instead of the outside world, the execution becomes reproducible.
 
 ```rust
@@ -152,7 +148,7 @@ Nothing happens outside this loop:
 
 In many implementations, this loop runs on a single thread because it makes it easier to enforce a strict and reproducible ordering of events. Some systems also use sandboxed runtimes like WebAssembly to isolate user code and further reduce accidental sources of nondeterminism from the host environment.
 
-### Collapsing the system into one process {#one-process}
+### Running the system in one process {#one-process}
 
 Once all nondeterministic channels are identified, they only become controllable if they live inside the same process as the seed.
 
@@ -175,17 +171,11 @@ Concurrency now is simulated ordering. And the entire system becomes a pure func
 
 [[WIDGET:sim-cluster]]
 
-## Building upon Tokio: how DST advances virtual time {#tokio-tick}
+## Building upon Tokio: how to advances time {#tokio-tick}
 
 The previous sections reduced deterministic simulation to a heartbeat: deliver due messages, choose which tasks run, advance virtual time, and record what happened. That loop is easy to draw. The harder part is making ordinary async Rust code obey it without asking every application to rewrite its timers, retries, heartbeats, and timeouts from scratch.
 
-This is where DST leans on Tokio instead of replacing it. Madsim rebuilds the async runtime from first principles. Turmoil and DST take the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.
-
-[[SVG:build-vs-buy]]
-
-The useful mental model is this:
-
-> A node writes normal Tokio code. The simulator decides when that node's Tokio runtime is allowed to make progress.
+This is where we lean on Tokio instead of replacing it. Madsim rebuilds the async runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.
 
 ### The runtime each node gets {#the-node-runtime}
 
@@ -322,7 +312,7 @@ pub(crate) fn tick_step(input: TickInput<'_>) -> Result<TickOutput, Error> {
 
 The order is part of the model. At the beginning of a step, DST delivers every packet whose scheduled delivery time is `<= ctx.elapsed`. It then chooses the non-crashed nodes to run. By default, that order is `IndexMap` insertion order. If `random_node_order` is enabled, the node list is shuffled with the simulation PRNG, so the schedule changes across seeds but replays for a fixed seed.
 
-[[WIDGET:turmoil-step]]
+[[WIDGET:step-loop]]
 
 Each node is activated through `TickContext::activate`, which installs the simulation context in scoped thread-local storage. That is why `UdpSocket::bind`, `UdpSocket::send_to`, and the optional clock hooks can tell which node is currently executing. While the node is active, DST calls `rt.tick(sim_tick)`. Only after every live node has been stepped does the harness advance `ctx.elapsed += sim_tick`.
 
