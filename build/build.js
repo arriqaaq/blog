@@ -120,7 +120,7 @@ const POST_CSS = `
   .byline{ font-size:.84rem; color:var(--muted); border-top:1px solid var(--rule); padding-top:.9rem; }
   .toc{ max-width:740px; margin:1.4rem auto 0; padding:1rem 1.1rem; border:1px solid var(--rule); border-radius:12px; }
   .toc h2{ font-size:.74rem; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); margin:.1rem 0 .7rem; border:0; padding:0; }
-  .toc ol{ list-style:none; margin:0; padding:0; columns:2; column-gap:2rem; }
+  .toc ol{ list-style:none; margin:0; padding:0; }
   .toc li{ break-inside:avoid; margin:.22rem 0; font-size:.92rem; }
   .toc-n{ color:var(--accent); font:600 .76rem ui-monospace,monospace; margin-right:.5rem; }
   .toc a{ color:var(--fg); text-decoration:none; } .toc a:hover{ text-decoration:underline; }
@@ -240,30 +240,77 @@ function writeIndex(posts) {
       ${p.eyebrow ? `<div class="pe">${esc(p.eyebrow)}</div>` : ''}<b>${esc(p.title)} →</b>
       ${p.dek ? `<div class="d">${esc(p.dek)}</div>` : ''}
       <div class="m">~${p.words.toLocaleString()} words · ${p.mounts} interactive widgets · ${p.diagrams} diagrams</div></a></li>`).join('\n');
-  const widgetCards = Object.entries(WIDGETS).map(([n, w]) => `    <li><a href="widgets/${n}.html">${w.t} →</a><div class="d">${w.s}</div></li>`).join('\n');
+  const aboutHtml = (SITE.role || SITE.github) ? `<h2>About</h2>
+<p class="about">${SITE.role ? esc(SITE.role) + '. ' : ''}${SITE.github ? `Find me on <a href="${esc(SITE.github)}" target="_blank" rel="noopener">GitHub ↗</a>.` : ''}</p>
+` : '';
 
   fs.writeFileSync(path.join(ROOT, 'index.html'), `<!doctype html>
 <html lang="en" data-mode="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(SITE.title)}</title>${FONT}<style>
-  :root{color-scheme:light dark}html[data-mode=dark]{background:#14151a;color:#e6e8ec}html[data-mode=light]{background:#fbfbfc;color:#1f2430}
-  body{font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;max-width:740px;margin:3rem auto;padding:0 1rem;line-height:1.65}
-  h1{font-size:1.8rem;margin:0 0 .3rem}.sub{opacity:.65;margin:0 0 1.5rem}
-  h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.1em;opacity:.6;margin-top:2.2rem}
-  ul{list-style:none;padding:0}li{border:1px solid rgba(127,127,127,.25);border-radius:10px;padding:.85rem 1.05rem;margin-bottom:.65rem}
-  li:has(a.post){background:rgba(124,58,237,.06);border-color:rgba(127,127,127,.3)}
-  a{color:#7c3aed;font-weight:700;text-decoration:none}a:hover{text-decoration:underline}
-  .post b{font-size:1.15rem}.pe{font:600 .66rem/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#7c3aed;opacity:.85;margin-bottom:.35rem}
-  .d{font-size:.9rem;opacity:.72;margin-top:.25rem;color:inherit;font-weight:400}.m{font-size:.78rem;opacity:.6;margin-top:.4rem;color:inherit;font-weight:400}
-  button#theme{font:inherit;cursor:pointer;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;border-radius:7px;padding:.3rem .6rem;margin-bottom:1.3rem}</style></head>
-<body><h1>${esc(SITE.title)}</h1><p class="sub">${esc(SITE.sub)}</p>
-<button id="theme">light / dark</button>
-<h2>Posts</h2><ul>
+<title>${esc(SITE.title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet"><style>
+  *{box-sizing:border-box}
+  :root{ color-scheme:light dark;
+    --primary:#7c5cfc; --secondary:#c471f5; --grad:linear-gradient(135deg,#7c5cfc,#c471f5);
+    --canvas:#f6f4f9; --surface:#ffffff; --ink:#0a1320; --muted:#5b6478;
+    --rule:rgba(18,14,45,.1); --shadow:rgba(124,92,252,.18);
+    --mesh-a:rgba(124,92,252,.16); --mesh-b:rgba(196,113,245,.12); }
+  html[data-mode=dark]{ --canvas:#0e0f16; --surface:#181a26; --ink:#ecedf5; --muted:#9aa3b6;
+    --rule:rgba(255,255,255,.1); --shadow:rgba(124,92,252,.34);
+    --mesh-a:rgba(124,92,252,.2); --mesh-b:rgba(196,113,245,.14); }
+  html,body{margin:0}
+  body{ font-family:'Geist','Inter',system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    color:var(--ink); line-height:1.65; min-height:100vh; -webkit-font-smoothing:antialiased;
+    background:
+      radial-gradient(42rem 36rem at -6rem -10rem,var(--mesh-a),transparent 70%),
+      radial-gradient(34rem 30rem at 108% 2rem,var(--mesh-b),transparent 66%),
+      var(--canvas);
+    background-attachment:fixed; }
+  .wrap{ position:relative; max-width:760px; margin:0 auto; padding:3.6rem 1.3rem 6rem; }
+  .hero{ margin-bottom:1rem; }
+  h1{ font-size:clamp(2.4rem,6vw,3.1rem); font-weight:700; letter-spacing:-.035em; line-height:1.04;
+    margin:0 0 .55rem; width:fit-content; max-width:100%;
+    background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .sub{ font-size:1.1rem; color:var(--muted); margin:0; max-width:36rem; }
+  h2{ font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:.18em; color:var(--muted); margin:2.8rem 0 1.1rem; }
+  ul{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.85rem; }
+  li{ margin:0; }
+  a.post{ display:block; position:relative; overflow:hidden; text-decoration:none; color:inherit;
+    background:var(--surface); border:1px solid var(--rule); border-radius:16px; padding:1.2rem 1.35rem;
+    box-shadow:0 1px 2px rgba(10,12,30,.05);
+    transition:transform .16s ease, box-shadow .28s ease, border-color .28s ease; }
+  a.post::before{ content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+    background:linear-gradient(115deg,rgba(255,255,255,.07),transparent 44%); }
+  a.post::after{ content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+    background:var(--grad); opacity:0; transition:opacity .28s ease; }
+  a.post:hover{ transform:translateY(-2px); border-color:transparent; box-shadow:0 14px 34px var(--shadow); }
+  a.post:hover::after{ opacity:1; }
+  .post b{ display:block; font-size:1.22rem; font-weight:600; letter-spacing:-.012em; margin:.1rem 0; }
+  .pe{ display:inline-block; font:600 .66rem/1 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase;
+    margin-bottom:.5rem; background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .d{ font-size:.95rem; color:var(--muted); margin-top:.35rem; font-weight:400; }
+  .m{ font-size:.76rem; color:var(--muted); opacity:.78; margin-top:.6rem; font-family:ui-monospace,monospace; }
+  p.about{ font-size:.98rem; color:var(--muted); max-width:36rem; }
+  a{ color:var(--primary); font-weight:600; text-decoration:none; }
+  a:not(.post):hover{ text-decoration:underline; }
+  button#theme{ position:absolute; top:1.5rem; right:1.3rem; font:inherit; font-size:.78rem; cursor:pointer;
+    color:var(--muted); background:var(--surface); border:1px solid var(--rule); border-radius:999px; padding:.34rem .8rem;
+    transition:border-color .2s ease, color .2s ease, box-shadow .2s ease; }
+  button#theme:hover{ border-color:var(--primary); color:var(--ink); box-shadow:0 4px 14px var(--shadow); }</style></head>
+<body>
+<main class="wrap">
+  <button id="theme">light / dark</button>
+  <header class="hero">
+    <h1>${esc(SITE.title)}</h1>
+    <p class="sub">${esc(SITE.sub)}</p>
+  </header>
+  <h2>Posts</h2>
+  <ul>
 ${cards}
-</ul>
-<h2>Interactive widgets</h2><ul>
-${widgetCards}
-</ul>
-<script>${themeJs}</script></body></html>`);
+  </ul>
+  ${aboutHtml}</main>
+<script>${themeJs}</script>
+</body></html>`);
 }
 
 // ---------- main ----------

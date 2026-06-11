@@ -1,12 +1,12 @@
 /**
  * DST clock_gettime recursion (re-skinned via dst-kit) — the bug that forced our own framework.
  *
- * Our test hook intercepts clock_gettime so paused sim time is what the runtime sees. The buggy
- * guard asked "are we inside the sim?" via sim_elapsed(), which itself reads the host
- * timer → tokio Instant::now() → std Instant::now() → clock_gettime → our hook → … unbounded
- * recursion that blows the stack the moment a crash/bounce probes the clock. The one-line fix swaps
- * the guard to tokio::runtime::Handle::try_current().is_ok(): a TLS-only check that never reads a
- * clock, so the hook returns paused sim time immediately and the stack stays shallow.
+ * Our test hook intercepts clock_gettime so paused sim time is what the runtime sees. A naive guard
+ * that asked "are we inside the sim?" by reading the clock (e.g. Instant::now()) would re-enter
+ * clock_gettime → our hook → the guard again → … unbounded recursion that blows the stack the moment
+ * a crash/bounce probes the clock. The fix gates on TickContext::in_node_context() (= NODE_CTX.is_set(),
+ * a scoped-TLS presence check that reads no clock), so the hook returns paused sim time immediately
+ * and the stack stays shallow. (dst/src/os_hooks/clock.rs:114-117; dst/src/sim/context.rs:31-32)
  *
  * Exposes window.DSTClockRecursion.init(containerId).
  */
@@ -20,29 +20,26 @@
   const W = 780, Hh = 360;
   const FR = { x: 360, w: 392, h: 36, gap: 8, y0: 30 };  // call-stack frames (right column)
   const MAXFR = 7;                                        // frames visible before the marker
-  // The recursion cycle: clock_gettime → sim_elapsed → try_current_host → timer → tokio → std → back
+  // The recursion cycle: clock_gettime → guard reads the clock → std Instant::now() → clock_gettime → …
   const CYCLE = [
     { fn: 'clock_gettime (our hook)', zone: 'amber' },
-    { fn: 'sim_elapsed()', zone: 'purple' },
-    { fn: 'World::try_current_host()', zone: 'purple' },
-    { fn: 'host.timer.sim_elapsed()', zone: 'blue' },
-    { fn: 'tokio Instant::now()', zone: 'blue' },
-    { fn: 'std Instant::now()', zone: 'gray' },
+    { fn: 'guard: "are we in sim?" reads the clock', zone: 'blue' },
+    { fn: 'std::time::Instant::now()', zone: 'gray' },
   ];
 
-  const SNIP_BUG = `fn clock_gettime(..) -> i64 {
-    // "are we inside the sim?" — but this READS the clock
-    if sim_elapsed().is_some() {   // ← recurses
+  const SNIP_BUG = `fn clock_gettime(..) -> timespec {
+    // naive "are we inside the sim?" — but this READS the clock
+    if Instant::now() > sim_start {   // ← Instant::now() → clock_gettime, recurses
         return sim_now();
     }
-    real_clock_gettime(..)
+    real_clock_gettime(..)            // dlsym(RTLD_NEXT)
 }`;
-  const SNIP_FIX = `fn clock_gettime(..) -> i64 {
-    // TLS-only: no clock read, no recursion
-    if Handle::try_current().is_ok() {      // ← safe
+  const SNIP_FIX = `fn clock_gettime(..) -> timespec {
+    // scoped-TLS presence check — reads no clock
+    if TickContext::in_node_context() {   // NODE_CTX.is_set()
         return sim_now();
     }
-    real_clock_gettime(..)
+    real_clock_gettime(..)                // dlsym(RTLD_NEXT)
 }`;
 
   function init(containerId) {
@@ -84,8 +81,8 @@
       logBody = root.querySelector('.dstk-log-body');
       drawScene(); bind(); render();
       K.addLog(logBody, st.fixed
-        ? '🌱 Fixed guard — Handle::try_current() reads TLS only, never the clock'
-        : '🌱 Buggy guard — sim_elapsed() reads the clock to ask if we should read the clock', 'hl');
+        ? '🌱 Fixed guard — TickContext::in_node_context() reads TLS only, never the clock'
+        : '🌱 Buggy guard — reads the clock to ask whether it should read the clock', 'hl');
     }
 
     function drawScene() {
@@ -95,11 +92,11 @@
       K.el('text', { x: lx, y: 26, fill: c.text, 'font-size': 13, 'font-weight': 700 }, content).textContent = 'crash(n2) probes the clock';
       const lines = st.fixed
         ? ['runtime tears down a host;', 'the hook fires while sim is paused.', '',
-           'Handle::try_current() only touches', 'thread-local runtime context —', 'no clock, no descent.',
+           'in_node_context() only checks a', 'scoped-TLS flag (NODE_CTX.is_set) —', 'no clock, no descent.',
            '', 'Hook returns paused sim time at once.', 'Stack stays one frame deep. ✓']
         : ['runtime tears down a host;', 'the hook fires while sim is paused.', '',
-           'The guard calls sim_elapsed() to', 'decide — but that reads the host', 'timer → tokio → std → clock_gettime',
-           '→ our hook → the guard again …', '', 'Each turn pushes the same frames.'];
+           'The guard reads the clock to', 'decide — Instant::now() → std →', 'clock_gettime → our hook → the',
+           'guard reads the clock again …', '', 'Each turn pushes the same frames.'];
       lines.forEach((t, i) => {
         K.el('text', { x: lx, y: 52 + i * 18, fill: i >= 3 ? c.text : c.muted, 'font-size': 11 }, content).textContent = t;
       });
@@ -155,7 +152,7 @@
     // BUGGY: keep pushing the same 6-frame cycle until we top out → overflow.
     async function crashBuggy() {
       const r = K.rng(st.seed);
-      K.addLog(logBody, 'crash(n2): hook fires; guard calls sim_elapsed() to decide…', 'warn');
+      K.addLog(logBody, 'crash(n2): hook fires; guard reads the clock to decide…', 'warn');
       let i = 0;
       while (st.frames.length < MAXFR) {
         await pushFrame(i);
@@ -174,7 +171,7 @@
 
     // FIXED: the guard is a TLS check, so the hook returns immediately — depth 1, clean return.
     async function crashFixed() {
-      K.addLog(logBody, 'crash(n2): hook fires; guard = Handle::try_current().is_ok() (TLS only)', 'warn');
+      K.addLog(logBody, 'crash(n2): hook fires; guard = TickContext::in_node_context() (TLS only)', 'warn');
       await pushFrame(0); // only our hook frame
       await K.delay(dur(220));
       if (st.busy === false) return;
@@ -196,8 +193,8 @@
       // rebuild to swap the code snippet caption, then re-render state
       build();
       K.addLog(logBody, fixed
-        ? 'guard → Handle::try_current().is_ok(): the one-line fix that broke the cycle'
-        : 'guard → sim_elapsed().is_some(): reads the clock to decide whether to read the clock', 'hl');
+        ? 'guard → TickContext::in_node_context(): the one-line fix that broke the cycle'
+        : 'guard → Instant::now() check: reads the clock to decide whether to read the clock', 'hl');
     }
 
     function bind() {

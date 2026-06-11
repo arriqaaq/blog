@@ -1,14 +1,14 @@
 /**
- * DST Paused Per-Node Clock (re-skinned via dst-kit) — time jumps, it doesn't flow.
+ * DST Paused Clock (dst-kit) — a node's now() jumps, it does not flow.
  *
- * Each node is its own Tokio current-thread runtime built start_paused(true): tokio::time::Instant
- * is frozen and only advances when the driver ticks. A continuous gray "wall clock" face sweeps
- * above for contrast; the node clocks sit still, then JUMP by exactly one tick when stepped.
- * n0.sleep(1s) schedules a far-future wake so the next Step auto-advances/leaps straight to it
- * (idle gaps skipped). crash(n2) rebuilds the runtime, resetting that node's paused Instant to 0
- * while sim-global elapsed marches on — the documented, physically-unfixable discontinuity.
- *
- * Exposes window.DSTPausedClock.init(containerId).
+ * The post's point: on a paused runtime, tokio::time::Instant::now() returns a value STORED inside
+ * the runtime — it does not follow real time. So this widget puts two clocks side by side:
+ *   • the WALL CLOCK — a real analog face whose hand sweeps continuously, all on its own, and which
+ *     the simulator completely ignores;
+ *   • the NODE CLOCK — one big now() number that sits perfectly FROZEN while the wall hand sweeps,
+ *     and only JUMPS when the driver advances it: +10 ms per Step, or a single leap of +1000 ms when
+ *     the node calls sleep(1s) (the idle gap is skipped — it costs 0 real time).
+ * Watch the contrast live: real time flows, node time jumps. Exposes window.DSTPausedClock.init(id).
  */
 (function () {
   'use strict';
@@ -17,209 +17,179 @@
   const { animate } = anime;
   const K = window.DSTKit;
 
-  const W = 780, Hh = 300, NODES = 3, TICK = 10;
-  const WALL = { cx: 64, cy: 60, r: 32 };
-  const CARD = { y: 124, h: 150, w: 226, gap: 20, x0: 28 };
-  const cardX = (i) => CARD.x0 + i * (CARD.w + CARD.gap);
+  const W = 780, Hh = 214;
+  const WALL = { cx: 96, cy: 120, r: 50 };
+  const NODE = { x: 392, y: 52, w: 374, h: 122 };
+  const HIST = { x: 392, y: 188, max: 6 };
 
-  const SNIPPET = `let rt = Builder::new_current_thread()
-    .enable_time()
-    .start_paused(true)   // tokio::time::Instant frozen
-    .build();
-
-// idle gaps are skipped: the driver leaps to the deadline
-sleep(Duration::from_secs(1)).await;  // completes in 0 real microseconds`;
+  const SRC =
+`let rt = Builder::new_current_thread()
+    .enable_time().start_paused(true).build();   // now() is frozen
+// real time keeps flowing and is ignored; the driver leaps over idle gaps
+sleep(Duration::from_secs(1)).await;             // 0 real microseconds`;
 
   function init(containerId) {
     const root = document.getElementById(containerId); if (!root) return;
     const uid = containerId;
-    const mk = () => Array.from({ length: NODES }, () => ({ clock: 0, crashed: false, sleepUntil: null }));
-    const st = { now: 0, step: 0, nodes: mk(), wallAngle: 0, playing: false, busy: false, speed: 1 };
-    let svg, content, anim, logBody, c, wallAnim = null;
+    const fresh = () => ({ now: 0, step: 0, jumps: 0, armed: false, busy: false, playing: false, speed: 1, wallAnim: null });
+    const st = fresh();
+    let svg, content, anim, logBody, c;
     const dur = (ms) => ms / st.speed;
+    const E = (k) => svg.querySelector('#' + CSS.escape(`${uid}-${k}`));
+    const hist = [];
 
     build();
 
     function controls() {
       return `<div class="dstk-tgroup">
-        <button class="dstk-btn dstk-btn--purple t-step">⏭ Step (+${TICK}ms)</button>
-        <button class="dstk-btn dstk-btn--green t-play">▶ Play</button>
-        <button class="dstk-btn dstk-btn--ghost t-pause" disabled>⏸ Pause</button></div>
+        <button class="dstk-btn dstk-btn--purple t-step">⏭ Step (+10 ms)</button>
+        <button class="dstk-btn dstk-btn--amber t-sleep">node calls sleep(1s)</button></div>
         <span class="dstk-tdiv"></span>
-        <div class="dstk-tgroup"><span class="dstk-tlabel">faults</span>
-          <button class="dstk-btn dstk-btn--amber t-sleep">n0.sleep(1s)</button>
-          <button class="dstk-btn dstk-btn--red t-crash">crash n2</button>
-          <button class="dstk-btn dstk-btn--ghost t-bounce">bounce n2</button></div>
+        <div class="dstk-tgroup">
+          <button class="dstk-btn dstk-btn--green t-play">▶ Play</button>
+          <button class="dstk-btn dstk-btn--ghost t-pause" disabled>⏸</button>
+          <button class="dstk-btn dstk-btn--ghost t-reset">↺ Reset</button></div>
         <span class="dstk-sp"></span>
-        <button class="dstk-btn dstk-btn--ghost t-reset">↺ Reset</button>
         <div class="dstk-tgroup"><span class="dstk-tlabel">speed</span>
           <select class="t-speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>`;
     }
 
     function build() {
       root.innerHTML = K.container({
-        title: 'Paused per-node clock', sub: 'time jumps, it does not flow',
+        title: "A node's clock jumps — it doesn't flow", sub: 'tokio::time::Instant::now() is a stored value the driver moves',
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
-        stats: [{ id: 'now', label: 'sim elapsed' }, { id: 'step', label: 'step' }],
-        cap: K.highlightRust(SNIPPET),
+        stats: [{ id: 'now', label: 'node now()' }, { id: 'step', label: 'step' }, { id: 'jumps', label: 'jumps' }],
+        cap: 'The wall clock (left) is real and never stops — and the sim ignores it. The node clock (right) '
+           + 'is frozen; it only moves when the driver advances it: +10 ms per Step, or one +1 s leap on sleep(1s).',
       });
       c = K.palette();
       svg = root.querySelector('.dstk-svg');
       content = svg.querySelector('.content');
       anim = svg.querySelector('.anim');
       logBody = root.querySelector('.dstk-log-body');
-      drawScene(); bind(); startWallClock(); render();
-      K.addLog(logBody, '🌱 clocks paused — they only move when the driver ticks', 'hl');
+      const code = document.createElement('div');
+      code.innerHTML = K.highlightRust(SRC);
+      root.querySelector('.dstk-toolbar').insertAdjacentElement('afterend', code.firstChild);
+      drawScene(); bind(); render(); startWall();
+      K.addLog(logBody, '🌱 watch the wall hand sweep on its own — the node number stays frozen until you Step', 'hl');
     }
-
-    function id(k, i) { return `${uid}-${k}-${i}`; }
-    function E(k, i) { return svg.querySelector('#' + CSS.escape(id(k, i))); }
 
     function drawScene() {
       content.innerHTML = '';
-      // wall clock face — gray, continuous, ignored by the sim
+      // intro line
+      K.el('text', { x: 18, y: 24, fill: c.muted, 'font-size': 10.5 }, content)
+        .textContent = 'Real time flows; the node clock jumps. Watch: the wall hand keeps sweeping while the node number sits still until a Step.';
+
+      // WALL CLOCK — analog face, hand sweeps continuously (real time, ignored by the sim)
       K.el('circle', { cx: WALL.cx, cy: WALL.cy, r: WALL.r, fill: K.grad(uid, 'gray'), stroke: c.gray, 'stroke-width': 2 }, content);
-      K.el('circle', { cx: WALL.cx, cy: WALL.cy, r: 2.6, fill: c.gray }, content);
-      K.el('line', { id: id('hand', 0), x1: WALL.cx, y1: WALL.cy, x2: WALL.cx, y2: WALL.cy - WALL.r + 6,
-        stroke: c.gray, 'stroke-width': 2, 'stroke-linecap': 'round', filter: K.glow(uid) }, content);
-      K.el('text', { x: WALL.cx + WALL.r + 14, y: WALL.cy - 5, fill: c.muted, 'font-size': 11.5 }, content)
-        .textContent = 'wall clock — real, continuous,';
-      K.el('text', { x: WALL.cx + WALL.r + 14, y: WALL.cy + 12, fill: c.muted, 'font-size': 11.5 }, content)
-        .textContent = 'and completely ignored by the sim.';
-
-      // node clock cards
-      for (let i = 0; i < NODES; i++) {
-        const x = cardX(i);
-        K.el('rect', { id: id('card', i), x, y: CARD.y, width: CARD.w, height: CARD.h, rx: 10,
-          fill: K.grad(uid, 'purple'), stroke: c.purple, 'stroke-width': 1.6 }, content);
-        K.el('circle', { cx: x + 16, cy: CARD.y + 20, r: 4.5, fill: c.purple }, content);
-        K.el('text', { x: x + 28, y: CARD.y + 24, fill: c.text, 'font-size': 14, 'font-weight': 700 }, content)
-          .textContent = 'n' + i;
-        K.el('text', { id: id('state', i), x: x + CARD.w - 12, y: CARD.y + 24, 'text-anchor': 'end',
-          fill: c.green, 'font-size': 11, 'font-weight': 600 }, content).textContent = 'running';
-        K.el('text', { x: x + 14, y: CARD.y + 58, fill: c.muted, 'font-size': 11 }, content)
-          .textContent = 'tokio Instant (paused)';
-        K.el('text', { id: id('clk', i), x: x + 14, y: CARD.y + 98, fill: c.purple, 'font-size': 28,
-          'font-weight': 700, 'font-variant-numeric': 'tabular-nums', filter: K.glow(uid) }, content).textContent = '0 ms';
-        K.el('text', { id: id('hint', i), x: x + 14, y: CARD.y + 128, fill: c.muted, 'font-size': 10 }, content)
-          .textContent = '';
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2, r1 = WALL.r - 6, r2 = WALL.r - 2;
+        K.el('line', { x1: WALL.cx + r1 * Math.sin(a), y1: WALL.cy - r1 * Math.cos(a), x2: WALL.cx + r2 * Math.sin(a), y2: WALL.cy - r2 * Math.cos(a), stroke: c.muted, 'stroke-width': 1 }, content);
       }
+      K.el('line', { id: uid + '-hand', x1: WALL.cx, y1: WALL.cy, x2: WALL.cx, y2: WALL.cy - (WALL.r - 12), stroke: c.gray, 'stroke-width': 2.4, 'stroke-linecap': 'round' }, content);
+      K.el('circle', { cx: WALL.cx, cy: WALL.cy, r: 3, fill: c.gray }, content);
+      K.el('text', { x: WALL.cx, y: WALL.cy + WALL.r + 16, 'text-anchor': 'middle', fill: c.muted, 'font-size': 10, 'font-weight': 700 }, content).textContent = 'wall clock';
+      K.el('text', { x: WALL.cx, y: WALL.cy + WALL.r + 29, 'text-anchor': 'middle', fill: c.muted, 'font-size': 8.5 }, content).textContent = 'real · never stops · ignored';
+
+      // big "≠" between the two — they are not the same clock
+      K.el('text', { x: (WALL.cx + WALL.r + NODE.x) / 2, y: WALL.cy + 6, 'text-anchor': 'middle', fill: c.muted, 'font-size': 22, 'font-weight': 700 }, content).textContent = '≠';
+
+      // NODE CLOCK — frozen, jumps on Step
+      K.el('rect', { id: uid + '-nbox', x: NODE.x, y: NODE.y, width: NODE.w, height: NODE.h, rx: 11, fill: K.grad(uid, 'purple'), stroke: c.purple, 'stroke-width': 1.6 }, content);
+      K.el('circle', { cx: NODE.x + 18, cy: NODE.y + 22, r: 4.5, fill: c.purple }, content);
+      K.el('text', { x: NODE.x + 30, y: NODE.y + 26, fill: c.text, 'font-size': 13, 'font-weight': 700 }, content).textContent = 'node clock';
+      K.el('text', { id: uid + '-ntag', x: NODE.x + NODE.w - 14, y: NODE.y + 26, 'text-anchor': 'end', fill: c.amber, 'font-size': 10, 'font-weight': 700 }, content).textContent = 'FROZEN';
+      K.el('text', { x: NODE.x + 16, y: NODE.y + 48, fill: c.muted, 'font-size': 10, 'font-family': "ui-monospace,'SF Mono',monospace" }, content).textContent = 'tokio::time::Instant::now()';
+      K.el('text', { id: uid + '-now', x: NODE.x + 16, y: NODE.y + 96, fill: c.purple, 'font-size': 38, 'font-weight': 700, 'font-variant-numeric': 'tabular-nums', filter: K.glow(uid) }, content).textContent = '0 ms';
+      K.el('text', { id: uid + '-nsub', x: NODE.x + NODE.w - 14, y: NODE.y + 96, 'text-anchor': 'end', fill: c.muted, 'font-size': 9.5 }, content).textContent = 'moves only on Step';
+
+      // history strip: the discrete jumps
+      K.el('text', { x: HIST.x, y: HIST.y - 6, fill: c.muted, 'font-size': 9 }, content).textContent = 'jumps:';
+      K.el('g', { id: uid + '-hist' }, content);
     }
 
-    function startWallClock() {
-      if (wallAnim && wallAnim.pause) wallAnim.pause();
-      const proxy = { a: st.wallAngle };
-      wallAnim = animate(proxy, { a: st.wallAngle + 360, duration: dur(2600), ease: 'linear',
-        loop: true, onUpdate: () => { st.wallAngle = proxy.a % 360; setHand(st.wallAngle); } });
-    }
-    function setHand(deg) {
-      const hand = E('hand', 0); if (!hand) return;
-      const rad = (deg - 90) * Math.PI / 180, len = WALL.r - 6;
-      hand.setAttribute('x2', WALL.cx + Math.cos(rad) * len);
-      hand.setAttribute('y2', WALL.cy + Math.sin(rad) * len);
+    // continuous wall-clock sweep — runs on its own forever, regardless of stepping
+    function startWall() {
+      if (st.wallAnim && st.wallAnim.pause) st.wallAnim.pause();
+      const hand = E('hand'); if (!hand) return;
+      const p = { a: 0 };
+      st.wallAnim = animate(p, { a: 360, duration: 2600, ease: 'linear', loop: true,
+        onUpdate: () => hand.setAttribute('transform', `rotate(${p.a} ${WALL.cx} ${WALL.cy})`) });
     }
 
     function stat(k, v) { const e = root.querySelector('#' + CSS.escape(uid + '-stat-' + k)); if (e) e.textContent = v; }
-
     function render() {
-      stat('now', st.now + ' ms'); stat('step', st.step);
-      for (let i = 0; i < NODES; i++) {
-        const n = st.nodes[i];
-        E('clk', i).textContent = n.clock + ' ms';
-        E('clk', i).setAttribute('fill', n.crashed ? c.muted : c.purple);
-        const sEl = E('state', i), card = E('card', i);
-        if (n.crashed) {
-          sEl.textContent = 'crashed'; sEl.setAttribute('fill', c.red);
-          card.setAttribute('fill', K.grad(uid, 'red')); card.setAttribute('stroke', c.red); card.setAttribute('stroke-dasharray', '6,4');
-        } else if (n.sleepUntil != null) {
-          sEl.textContent = 'sleeping'; sEl.setAttribute('fill', c.amber);
-          card.setAttribute('fill', K.grad(uid, 'amber')); card.setAttribute('stroke', c.amber); card.setAttribute('stroke-dasharray', '0');
-        } else {
-          sEl.textContent = 'running'; sEl.setAttribute('fill', c.green);
-          card.setAttribute('fill', K.grad(uid, 'purple')); card.setAttribute('stroke', c.purple); card.setAttribute('stroke-dasharray', '0');
-        }
-        E('hint', i).textContent = n.crashed ? 'Instant reset to 0 on crash (global marches on)'
-          : (n.sleepUntil != null ? `will leap to ${n.sleepUntil} ms` : '');
-      }
+      stat('now', st.now + ' ms'); stat('step', st.step); stat('jumps', st.jumps);
+      E('now').textContent = st.now + ' ms';
+      let g = E('hist'); if (g) g.remove();
+      g = K.el('g', { id: uid + '-hist' }, content);
+      const recent = hist.slice(-HIST.max);
+      recent.forEach((v, i) => {
+        const x = HIST.x + i * 62, last = i === recent.length - 1;
+        K.el('rect', { x, y: HIST.y, width: 52, height: 20, rx: 5, fill: K.grad(uid, last ? 'amber' : 'purple'), stroke: last ? c.amber : c.purple, 'stroke-width': last ? 2 : 1 }, g);
+        K.el('text', { x: x + 26, y: HIST.y + 14, 'text-anchor': 'middle', fill: c.text, 'font-size': 9.5, 'font-variant-numeric': 'tabular-nums' }, g).textContent = v;
+        if (i < recent.length - 1) K.el('text', { x: x + 56, y: HIST.y + 14, 'text-anchor': 'middle', fill: c.muted, 'font-size': 10 }, g).textContent = '→';
+      });
     }
 
-    function jumpClock(i, to, color) {
-      const node = st.nodes[i], from = node.clock; node.clock = to;
-      const t = E('clk', i), card = E('card', i), proxy = { v: from };
-      animate(card, { opacity: [1, 0.55, 1], duration: dur(220), ease: 'inOut(2)' });
-      return animate(proxy, { v: to, duration: dur(260), ease: 'out(2)',
-        onUpdate: () => { t.textContent = Math.round(proxy.v) + ' ms'; t.setAttribute('fill', color); },
-        onComplete: () => { t.textContent = to + ' ms'; t.setAttribute('fill', color); } });
-    }
-
-    async function step() {
-      if (st.busy) return;
-      st.busy = true; setLock(true);
-
-      // auto-advance: if a sleeping node's wake is the next deadline, the driver leaps straight to it
-      const sleepers = st.nodes.map((n, i) => ({ n, i })).filter((x) => !x.n.crashed && x.n.sleepUntil != null);
-      if (sleepers.length) {
-        const next = Math.min(...sleepers.map((x) => x.n.sleepUntil));
-        K.addLog(logBody, `⏩ auto-advance ${st.now}→${next} ms (no work in between)`, 'warn');
-        st.now = next;
-        for (let i = 0; i < NODES; i++) {
-          const n = st.nodes[i];
-          if (n.crashed) continue;
-          if (n.sleepUntil != null && n.sleepUntil <= next) { await jumpClock(i, next, c.amber); n.sleepUntil = null; }
-          else await jumpClock(i, next, c.purple);
-        }
-        st.step++; render(); st.busy = false; setLock(false); return;
-      }
-
-      // ordinary tick: every running node's paused clock jumps by exactly one tick
-      st.now += TICK;
-      for (let i = 0; i < NODES; i++) if (!st.nodes[i].crashed) await jumpClock(i, st.now, c.purple);
-      st.step++; render();
+    async function advance(amount, label) {
+      if (st.busy) return; st.busy = true; setLock(true);
+      const from = st.now; st.now += amount; st.step++; st.jumps++;
+      E('ntag').textContent = 'JUMP +' + (amount >= 1000 ? (amount / 1000) + ' s' : amount + ' ms'); E('ntag').setAttribute('fill', c.amber);
+      E('nbox').setAttribute('stroke', c.amber);
+      await leapNumber(from, st.now);
+      hist.push(st.now); render();
+      E('nbox').setAttribute('stroke', c.purple);
+      E('ntag').textContent = 'FROZEN';
+      E('nsub').textContent = 'moves only on Step';
+      if (amount >= 1000) leapBanner('⏭ idle gap skipped: now() leapt +' + (amount / 1000) + ' s in 0 real time');
+      K.addLog(logBody, label, amount >= 1000 ? 'hl' : null);
       st.busy = false; setLock(false);
+    }
+    function step() {
+      if (st.armed) { st.armed = false; advance(1000, '③ next Step → leap to the sleep deadline: now() +1000 ms (0 real time)'); }
+      else advance(10, 'Step → now() jumps +10 ms (wall clock kept sweeping; node clock jumped)');
+    }
+    function sleep1s() {
+      if (st.busy) return;
+      st.armed = true;
+      E('nsub').textContent = 'sleep(1s) armed → next Step leaps +1 s';
+      K.addLog(logBody, '① node calls sleep(1000 ms) → far-future wake scheduled · ② now press Step to leap to it', 'warn');
+    }
+
+    function leapNumber(a, b) {
+      const el = E('now'); animate(el, { opacity: [1, 0.5, 1], duration: dur(360), ease: 'inOut(2)' });
+      const p = { v: a };
+      return animate(p, { v: b, duration: dur(360), ease: 'out(2)', onUpdate: () => el.textContent = Math.round(p.v) + ' ms', onComplete: () => el.textContent = b + ' ms' });
+    }
+    function leapBanner(msg) {
+      const old = content.querySelector('#' + CSS.escape(uid + '-leap')); if (old) old.remove();
+      const bw = 400, bh = 28, bx = NODE.x + (NODE.w - bw) / 2, by = NODE.y - 2;
+      const g = K.el('g', { id: uid + '-leap', opacity: 0 }, content);
+      K.el('rect', { x: Math.max(8, bx), y: by, width: bw, height: bh, rx: 8, fill: K.grad(uid, 'amber'), stroke: c.amber, 'stroke-width': 1.8, filter: K.glow(uid) }, g);
+      K.el('text', { x: Math.max(8, bx) + bw / 2, y: by + 19, 'text-anchor': 'middle', fill: c.amber, 'font-size': 12, 'font-weight': 700 }, g).textContent = msg;
+      animate(g, { opacity: [0, 1], duration: dur(200), ease: 'out(2)' });
+      animate(g, { opacity: [1, 0], delay: dur(1300), duration: dur(650), ease: 'in(2)', onComplete: () => g.remove() });
     }
 
     function bind() {
       root.querySelector('.t-step').onclick = () => { if (!st.busy) step(); };
+      root.querySelector('.t-sleep').onclick = sleep1s;
       root.querySelector('.t-play').onclick = play;
       root.querySelector('.t-pause').onclick = pause;
-      root.querySelector('.t-sleep').onclick = () => {
-        if (st.busy || st.nodes[0].crashed) return;
-        st.nodes[0].sleepUntil = st.now + 1000;
-        K.addLog(logBody, 'n0 calls sleep(1000ms) → far-future wake scheduled; next Step leaps to it', 'warn');
-        render();
-      };
-      root.querySelector('.t-crash').onclick = () => {
-        if (st.busy) return;
-        const n = st.nodes[2]; n.crashed = true; n.clock = 0; n.sleepUntil = null;
-        K.addLog(logBody, 'crash(n2) → runtime rebuilt; its paused Instant resets to 0 (sim elapsed unaffected)', 'err');
-        render();
-      };
-      root.querySelector('.t-bounce').onclick = () => {
-        if (st.busy || !st.nodes[2].crashed) return;
-        st.nodes[2].crashed = false; // resumes from 0 — the discontinuity
-        K.addLog(logBody, 'bounce(n2) → fresh runtime; clock resumes from 0 while global elapsed is ' + st.now + ' ms', 'hl');
-        render();
-      };
       root.querySelector('.t-reset').onclick = reset;
-      root.querySelector('.t-speed').onchange = (e) => { st.speed = parseFloat(e.target.value); startWallClock(); };
+      root.querySelector('.t-speed').onchange = (e) => st.speed = parseFloat(e.target.value);
     }
-
-    async function play() {
-      if (st.playing) return;
-      st.playing = true; pp();
-      while (st.playing) { await step(); if (!st.playing) break; await K.delay(dur(420)); }
-    }
+    async function play() { if (st.playing) return; st.playing = true; pp(); while (st.playing) { step(); await K.delay(dur(700)); } }
     function pause() { st.playing = false; pp(); }
     function reset() {
-      st.playing = false; pp();
-      st.now = 0; st.step = 0; st.nodes = mk(); st.busy = false; setLock(false);
-      drawScene(); render(); K.addLog(logBody, '↺ reset — clocks paused at 0', 'hl');
+      const sp = st.speed; if (st.wallAnim && st.wallAnim.pause) st.wallAnim.pause();
+      Object.assign(st, fresh()); st.speed = sp; hist.length = 0;
+      pp(); setLock(false); drawScene(); render(); startWall();
+      K.addLog(logBody, '↺ reset — clock frozen at 0; wall clock still sweeping', 'hl');
     }
     function pp() { root.querySelector('.t-play').disabled = st.playing; root.querySelector('.t-pause').disabled = !st.playing; }
-    function setLock(b) {
-      K.lock(root, ['.t-step', '.t-sleep', '.t-crash', '.t-bounce', '.t-reset'], b);
-      if (!st.playing) root.querySelector('.t-play').disabled = b;
-    }
+    function setLock(b) { K.lock(root, ['.t-step', '.t-sleep', '.t-reset'], b); if (!st.playing) root.querySelector('.t-play').disabled = b; }
 
     new MutationObserver((m) => { for (const x of m) if (x.attributeName === 'data-mode') build(); })
       .observe(document.documentElement, { attributes: true });

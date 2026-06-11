@@ -1,8 +1,8 @@
 ---
-title: The Seed Contract
+title: Learning DST for testing our distributed transactional KV store
 dek: Building a deterministic simulation tester.
 eyebrow: Deterministic Simulation Testing
-slug: the-seed-contract
+slug: dst
 date: 2026-06-09
 byline: A build log on dst — a from-scratch DST runtime, standing on Tokio, Turmoil, madsim, and FoundationDB.
 ---
@@ -15,11 +15,11 @@ Deterministic Simulation Testing (DST) is an interesting approach to addressing 
 
 The rest of this blog documents my learning of how DST works in real systems. I've also been building a [DST](https://github.com/arriqaaq/dst) library from scratch to understand the underlying ideas from first principles.
 
-Along the way, I've also used it to test parts of our distributed platform. That said, if you're looking for a more mature and production-proven ecosystem, I highly recommend checking out turmoil and madsim. Much of my own work is heavily inspired by turmoil, and many of the ideas presented here build on its concepts.
+Along the way, I've also used it to test parts of our distributed kv store. That said, if you're looking for a more mature and production-proven ecosystem, I highly recommend checking out turmoil and madsim. Much of my own work is heavily inspired by turmoil, and many of the ideas presented here build on its concepts.
 
 ## What deterministic simulation testing actually is {#what-is-dst}
 
-The easiest thing in the world to test is a pure function:
+The easiest thing to test is a pure function:
 
 ```rust
 fn checkout_total(price: u64, qty: u64) -> u64 {
@@ -27,9 +27,9 @@ fn checkout_total(price: u64, qty: u64) -> u64 {
 }
 ```
 
-*Why* it's so easy? Because `checkout_total(300, 2)` is `600` — today, tomorrow, on my laptop, on the CI box, in a year. The output depends on nothing but the two numbers you handed it. If a test over it ever fails, it fails the same way every time, and the inputs that broke it sit right there in the assertion.
+*Why* it's so easy? Because `checkout_total(300, 2)` is *always* `600`. The output depends on nothing but the two numbers passed to the function. If a test over it ever fails, it fails the same way every time, and the inputs that broke it sit right there in the assertion.
 
-This property — *same input, same output* — is the foundation of DST. Everything else that I write below is an attempt to drag a concurrent, networked system back into behaving like `checkout_total`.
+This property — *same input, same output* — is the foundation of DST. Everything else coming up is to model a system back into behaving like `checkout_total`.
 
 Now here is almost the same function, with one additional line added:
 
@@ -50,7 +50,7 @@ fn checkout_total(price: u64, qty: u64) -> u64 {
 }
 ```
 
-Nobody passed the clock in, but the function reads it anyway. Now `checkout_total(300, 2)` returns `600` — usually. About one call in twenty it returns `300`. The output no longer depends only on its arguments; it depends on a *hidden input*, the wall clock, that the caller never sees and can never reproduce. A test that catches the `300` case catches it once and never again, because the nanosecond that triggered it is already gone.
+Now `checkout_total(300, 2)` returns `600` usually. About one call in twenty it returns `300`. The output no longer depends only on its arguments; it depends on a *hidden input*, the wall clock, that the caller never sees and can never reproduce. A test that catches the `300` case catches it once and never again, because the nanosecond that triggered it is already gone.
 
 The fix is simple: stop *reading* the hidden input and start *passing* it.
 
@@ -71,29 +71,23 @@ fn replays_forever() {
 }
 ```
 
-The clock went from something the function *reaches for* to something the test *hands it*. The function is pure again, and the bug now has an address — the triple `(300, 2, 1_700…000)` — that you can return to as many times as you like.
+The clock went from something the function *reaches for* to something the test *hands it*. The function is pure again, and the bug now has the exact inputs that led to it — the triple `(300, 2, 1_700…000)`.
 
 [[WIDGET:pure-function]]
 
-That is the entire trick, and the rest of this post is what it costs to pull it off at scale. A single function has one hidden input; a distributed system has thousands: every `now()`, every thread, every packet that arrives just before or just after its neighbour, every `HashMap` which has a random ordering. We cannot add ten thousand parameters to a function signature by hand.
+That is the entire trick. A single function has one hidden input; a distributed system has thousands: every `now()`, every thread, every packet that arrives just before or just after its neighbour, every `HashMap` which has a random ordering. We cannot add ten thousand parameters to a function signature by hand.
 
 So DST runs the whole distributed system — the network, the clocks, the task scheduler, the random numbers — inside one controlled process, and replaces every source of nondeterminism with something you own and feed from a single place. That place is the *seed*.
 
-Given a seed, the run is not *similar* to a previous run with that seed; it is the same run, byte for byte, on your machine today and on a CI box forever. That is the whole idea, and it is worth being precise about why it is so much stronger than what an ordinary test gives you.
-
 > Same seed implies the same execution implies the same result. Always.
-
-An ordinary integration test samples *one* accidental interleaving. You spin up a few nodes, stress test them, and whatever the OS scheduler, the wall clock, and the kernel's socket buffers happened to do that millisecond is the timeline you tested. Run it again and you get a different timeline. When something breaks once in a thousand runs (as you may have seen in many jepsen reports), you get a stack trace you can never visit again. It just sits in the flaky-test department.
 
 ### What a seed actually is {#what-is-a-seed}
 
-This is one of those terms that you will keep seeing in DST discussions, and here is how to grasp the intuition behind it.
-
-Computers are deterministic machines. Given the same inputs, they'll produce the same outputs every time. So when a program asks for a "random" number, it's usually getting one from a deterministic algorithm called a pseudo-random number generator.
+Computers are deterministic machines. Given the same inputs, they'll produce the same outputs every time. So when a program asks for a "random" number, it's usually getting one from a deterministic algorithm called a pseudo-random number generator (PRNG).
 
 A PRNG keeps some internal state and uses it to generate the next number in a sequence. Start it with the same seed and you'll get the exact same sequence every time. The numbers may look random, but they're completely reproducible—which turns out to be exactly what DST wants.
 
-A *seed*, then, is just the starting point for that sequence. A single u64 determines an entire stream of seemingly random choices.
+A *seed*, then, is just the starting point for that sequence.
 
 The important thing to understand is that the seed is only one piece of the puzzle. A DST engine is deterministic because it takes control of the things that are normally left up to the operating system: packet delivery order, timer execution, task scheduling, network faults, and so on. Once those decisions are made by the simulator instead of the outside world, the execution becomes reproducible.
 
@@ -103,18 +97,14 @@ DST_SEED=<n> cargo test <name>
 
 The seed simply gives the simulator a way to explore different executions while keeping each one replayable. Change the seed and you may get a different schedule, different faults, or a different delivery order. Keep the seed the same and the simulator can reconstruct the same execution again.
 
-
-Drag the right-hand seed below: watch two runs land on the identical fingerprint, then flip one bit of the seed and watch them split into entirely different universes.
-
 [[WIDGET:same-seed-replay]]
 
 
 ### Where nondeterminism enters the system {#sources}
 
-Nondeterminism is anything the program reads that is not part of those inputs — values supplied by the environment rather than the seed.
+Nondeterminism is anything the program reads that is not part of those inputs — values supplied by the environment rather than the seed. It can show up in:
 
-In practice, it shows up through a small number of channels:
-1. **Concurrency**. Which task runs next is chosen by the OS scheduler, and on multicore systems execution is genuinely interleaved in different ways each run.
+1. **Concurrency**. Which task runs next is chosen by the OS scheduler, and on multicore systems execution is interleaved in different ways each run.
 
 2. **Time**. Calls to the system clock (now, Instant, clock_gettime) return values that change across runs, affecting timeouts, retries, leases, and scheduling logic.
 
@@ -124,7 +114,7 @@ In practice, it shows up through a small number of channels:
 
 5. **Iteration order**. Data structures like hash maps and hash sets may randomize iteration order using OS entropy.
 
-All five share the same property: the value is produced outside the process, while the seed lives inside it. That boundary is what makes reproducibility fail.
+The randomness and uncontrollable aspects is what makes reproducibility fail.
 
 ### The simulator {#the-heartbeat}
 
@@ -135,7 +125,7 @@ Once those sources are identified, the simulator’s role is to pull them inside
 At each tick, the loop:
 
 - delivers messages scheduled for the current virtual time
-- decides which tasks run next (under a fixed policy)
+- decides which tasks run next
 - advances virtual time explicitly
 - steps all active nodes
 - records an execution log or hash
@@ -146,16 +136,11 @@ Nothing happens outside this loop:
 - there is no background execution
 - all scheduling decisions are made explicitly per tick
 
-In many implementations, this loop runs on a single thread because it makes it easier to enforce a strict and reproducible ordering of events. Some systems also use sandboxed runtimes like WebAssembly to isolate user code and further reduce accidental sources of nondeterminism from the host environment.
+In many implementations, this loop runs on a single thread because it makes it easier to enforce a strict and reproducible ordering of events. Some systems also use runtimes like WASM to isolate user code and further reduce accidental sources of nondeterminism from the host environment.
 
-### Running the system in one process {#one-process}
+### Why run the system in one process {#one-process}
 
-Once all nondeterministic channels are identified, they only become controllable if they live inside the same process as the seed.
-
-That leads to the central design choice:
-
-> The distributed system is simulated as a single process that owns time, scheduling, randomness, and I/O.
-
+The nondeterministic channels become controllable only if they live inside the same process as the seed. This makes it easy to simulate the distributed system as a single process that owns time, scheduling, randomness, and I/O.
 
 Each external source becomes an internal component:
 
@@ -171,11 +156,11 @@ Concurrency now is simulated ordering. And the entire system becomes a pure func
 
 [[WIDGET:sim-cluster]]
 
-## Building upon Tokio: how to advances time {#tokio-tick}
+## Building upon Tokio {#tokio-tick}
 
 The previous sections reduced deterministic simulation to a heartbeat: deliver due messages, choose which tasks run, advance virtual time, and record what happened. That loop is easy to draw. The harder part is making ordinary async Rust code obey it without asking every application to rewrite its timers, retries, heartbeats, and timeouts from scratch.
 
-This is where we lean on Tokio instead of replacing it. Madsim rebuilds the async runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.
+This is where we lean on Tokio instead of replacing it. Madsim rebuilds the runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.
 
 ### The runtime each node gets {#the-node-runtime}
 
@@ -206,8 +191,6 @@ fn build_runtime(sim_seed: u64, node_name: &str) -> Result<Runtime, Error> {
 }
 ```
 
-The four takeaways:
-
 - `new_current_thread` gives the node one executor thread, so Tokio is not racing work across a pool of OS-scheduled workers. 
 - `enable_time` installs Tokio's timer driver. 
 - `start_paused(true)` freezes Tokio's own clock: `tokio::time::Instant::now()` no longer advances just because real wall-clock time advanced
@@ -221,13 +204,13 @@ On an ordinary runtime, `tokio::time::Instant::now()` eventually follows the hos
 
 In Tokio's `test-util` build, the clock stores a base `std::time::Instant`. When the clock is paused, Tokio clears the `unfrozen` field. After that, `tokio::time::Instant::now()` returns the stored base instant instead of adding host elapsed time. The base instant changes only when Tokio advances it, either through an explicit advance or through Tokio's paused-time auto-advance path.
 
-That is the first key handoff: a node calling `tokio::time::Instant::now()` is not reading the machine's live clock. It is reading a value owned by that node's Tokio runtime.
+So a node calling `tokio::time::Instant::now()` is not reading the machine's live clock. It is reading a value owned by that node's Tokio runtime.
 
 [[WIDGET:paused-clock]]
 
 ### Advancing a node with a sleep fence {#how-a-node-tick-advances-time}
 
-Once Tokio time is paused, DST can advance a node by awaiting a timer inside that node's runtime. The core of `NodeRuntime::tick` is small:
+Once Tokio time is paused, we can advance a node by awaiting a timer inside that node's runtime. The core of `NodeRuntime::tick` is small:
 
 ```rust
 pub fn tick(&mut self, duration: Duration) -> Result<bool, Error> {
@@ -328,39 +311,6 @@ At this point it is finally useful to name the split: Tokio time is private to e
 
 A dependency that calls `std::time::Instant::now()`, `SystemTime::now()`, or raw `clock_gettime` can still reach the host clock. DST's optional Unix `os-clock-hooks` close part of that gap by interposing `clock_gettime` while execution is inside a node context. Those hooks return the published `TickContext::elapsed` for monotonic clocks and `wall_epoch + elapsed` for realtime clocks. Outside node context, or without the hooks, raw clock reads fall back to the host.
 
-One subtle point follows from the previous subsection: the hook publishes harness time, not the private Tokio time of whichever node happens to be running. That is intentional. Raw OS clocks are process-level APIs, so DST answers them from the process-level simulation clock.
-
-### Startup alignment is a warm-up, not a barrier {#startup-alignment}
-
-DST also runs a small initialization window after spawning a node task:
-
-```rust
-pub(crate) const INIT_ALIGN: Duration = Duration::from_millis(1);
-
-fn spawn_and_init(tokio: &Runtime, local: &LocalSet, fut: NodeTask) -> JoinHandle<NodeResult> {
-    tokio.block_on(local.run_until(async {
-        let handle = tokio::task::spawn_local(fut);
-        tokio::time::sleep(Self::INIT_ALIGN).await;
-        handle
-    }))
-}
-```
-
-After each host, client, or bounced host is spawned, DST accounts for that warm-up on the shared simulation clock:
-
-```rust
-fn account_init_align(&mut self) {
-    self.ctx.borrow_mut().elapsed += NodeRuntime::INIT_ALIGN;
-
-    #[cfg(all(feature = "os-clock-hooks", unix))]
-    crate::os_hooks::publish_sim_elapsed(self.ctx.borrow().elapsed);
-}
-```
-
-It is tempting to describe this as putting every node on the same starting line, but the code gives a narrower guarantee. It gives each spawned node the same one-millisecond Tokio warm-up and keeps the shared simulation clock, and optional clock-hook state, in sync with that warm-up.
-
-It is not a magic barrier. A future that never yields can still monopolize its poll. Initialization that performs network I/O is observable because `send_to` stamps packets with the current `ctx.elapsed`. The useful invariant is: well-behaved node tasks get a deterministic warm-up window to reach an async wait point before the main simulation loop starts stepping them.
-
 ### Where Tokio can still choose {#tokio-internals}
 
 Paused time removes host time from Tokio timers, but the runtime can still make scheduling choices. DST either eliminates those choices by construction or pins them to the seed.
@@ -371,7 +321,7 @@ The first choice is worker scheduling. `new_current_thread` is a requirement, no
 
 The second choice is `tokio::select!`. By default, `select!` does not always poll branches top-to-bottom. The macro generates a pseudo-random starting branch so a loop does not structurally favor the first branch forever. That is good production fairness and bad replay unless the randomness is controlled.
 
-DST's optional `tokio-rng-seed` path controls it by deriving a node-specific seed and passing it to Tokio's `Builder::rng_seed`. Because that builder method is behind `tokio_unstable`, this is not a normal stable Tokio setting. Without it, use `biased;` only when fixed branch priority is intentionally part of the model, or move the choice into an explicitly seeded simulator primitive.
+DST controls it by deriving a node-specific seed and passing it to Tokio's `Builder::rng_seed`.
 
 [[WIDGET:select-seed]]
 
@@ -426,7 +376,7 @@ The final piece is not another layer; it is the receipt. Every meaningful event 
 
 That is the framework in one picture: the seed feeds the driver, the driver advances paused runtimes, the network turns messages into scheduled events, the hooks catch hidden host reads, and the history hash tells you whether the contract held.
 
-## Using it inside enterprise to test TAPIR {#testing-tapir}
+## Using it to test our Distributed KV Store {#testing-tapir}
 
 A deterministic simulator is only useful if the system under test can be placed inside it without rewriting the system.
 
@@ -565,17 +515,13 @@ This is enough detail for the reader. We do not need to walk through every inter
 
 ### Replay is the payoff {#tapir-replay}
 
-When a run fails, the debugging loop should be boring:
+When a run fails, the debugging loop is simple:
 
 ```bash
 DST_SEED=<failing-seed> cargo test <test-name>
 ```
 
-The same seed reconstructs the same world: the same packet delays, the same node crashes, the same timer deadlines, the same partitions, and the same assertion failure.
-
-[[WIDGET:same-seed-replay]]
-
-That is the point of using DST here. The simulator is not a separate model of TAPIR. It is the same core code placed behind replaceable interfaces, driven by virtual time, a simulated network, seeded faults, and replayable invariants.
+That is the point of using DST here. The simulator is not a separate model of our KV store TAPIR. It is the same core code placed behind replaceable interfaces, driven by virtual time, a simulated network, seeded faults, and replayable invariants.
 
 > The protocol stays the protocol. The world around it becomes deterministic.
 

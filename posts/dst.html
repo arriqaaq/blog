@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en" data-mode="light">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The Seed Contract</title>
+<title>Learning DST for testing our distributed transactional KV store</title>
 <meta name="description" content="Building a deterministic simulation tester.">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
@@ -19,7 +19,7 @@
   .byline{ font-size:.84rem; color:var(--muted); border-top:1px solid var(--rule); padding-top:.9rem; }
   .toc{ max-width:740px; margin:1.4rem auto 0; padding:1rem 1.1rem; border:1px solid var(--rule); border-radius:12px; }
   .toc h2{ font-size:.74rem; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); margin:.1rem 0 .7rem; border:0; padding:0; }
-  .toc ol{ list-style:none; margin:0; padding:0; columns:2; column-gap:2rem; }
+  .toc ol{ list-style:none; margin:0; padding:0; }
   .toc li{ break-inside:avoid; margin:.22rem 0; font-size:.92rem; }
   .toc-n{ color:var(--accent); font:600 .76rem ui-monospace,monospace; margin-right:.5rem; }
   .toc a{ color:var(--fg); text-decoration:none; } .toc a:hover{ text-decoration:underline; }
@@ -46,18 +46,18 @@
   .topbar .in{ max-width:740px; margin:0 auto; padding:.5rem 1.1rem; display:flex; justify-content:space-between; align-items:center; font-size:.82rem; }
   .topbar a{ color:var(--muted); text-decoration:none; } .topbar button{ font:inherit; cursor:pointer; background:transparent; border:1px solid var(--rule); color:inherit; border-radius:6px; padding:.25rem .55rem; }</style></head>
 <body>
-<div class="topbar"><div class="in"><a href="../index.html">← all posts</a><span>The Seed Contract</span><button id="theme">light / dark</button></div></div>
+<div class="topbar"><div class="in"><a href="../index.html">← all posts</a><span>Learning DST for testing our distributed transactional KV store</span><button id="theme">light / dark</button></div></div>
 <header class="post">
   <div class="eyebrow">Deterministic Simulation Testing</div>
-  <h1>The Seed Contract</h1>
+  <h1>Learning DST for testing our distributed transactional KV store</h1>
   <p class="dek">Building a deterministic simulation tester.</p>
-  <p class="byline">A build log on dst — a from-scratch DST runtime, standing on Tokio, Turmoil, madsim, and FoundationDB. ~5,395 words · 22 interactive widgets · 4 diagrams</p>
+  <p class="byline">A build log on dst — a from-scratch DST runtime, standing on Tokio, Turmoil, madsim, and FoundationDB. ~4,828 words · 21 interactive widgets · 4 diagrams</p>
 </header>
 <nav class="toc"><h2>Contents</h2><ol>
 <li><span class="toc-n">01</span><a href="#what-is-dst">What deterministic simulation testing actually is</a></li>
-<li><span class="toc-n">02</span><a href="#tokio-tick">Building upon Tokio: how to advances time</a></li>
+<li><span class="toc-n">02</span><a href="#tokio-tick">Building upon Tokio</a></li>
 <li><span class="toc-n">03</span><a href="#dst-project">Anatomy of the framework: four layers over a seed</a></li>
-<li><span class="toc-n">04</span><a href="#testing-tapir">Using it inside enterprise to test TAPIR</a></li>
+<li><span class="toc-n">04</span><a href="#testing-tapir">Using it to test our Distributed KV Store</a></li>
 <li><span class="toc-n">05</span><a href="#references">References</a></li>
 </ol></nav>
 <div class="wrap"><article>
@@ -76,19 +76,19 @@
           <text x="481.4" y="80.4" text-anchor="end" font-size="12.5" font-weight="700" fill="#7c3aed" opacity="1">DST</text></svg><figcaption>Where DST sits: systematic, fast, and reproducible</figcaption></figure>
 
 <p>The rest of this blog documents my learning of how DST works in real systems. I&#39;ve also been building a <a href="https://github.com/arriqaaq/dst">DST</a> library from scratch to understand the underlying ideas from first principles.</p>
-<p>Along the way, I&#39;ve also used it to test parts of our distributed platform. That said, if you&#39;re looking for a more mature and production-proven ecosystem, I highly recommend checking out turmoil and madsim. Much of my own work is heavily inspired by turmoil, and many of the ideas presented here build on its concepts.</p>
+<p>Along the way, I&#39;ve also used it to test parts of our distributed kv store. That said, if you&#39;re looking for a more mature and production-proven ecosystem, I highly recommend checking out turmoil and madsim. Much of my own work is heavily inspired by turmoil, and many of the ideas presented here build on its concepts.</p>
 
 </section>
 
 <section class="sec">
 <h2 id="what-is-dst">What deterministic simulation testing actually is</h2>
-<p>The easiest thing in the world to test is a pure function:</p>
+<p>The easiest thing to test is a pure function:</p>
 <pre><code class="language-rust">fn checkout_total(price: u64, qty: u64) -&gt; u64 {
     price * qty
 }
 </code></pre>
-<p><em>Why</em> it&#39;s so easy? Because <code>checkout_total(300, 2)</code> is <code>600</code> — today, tomorrow, on my laptop, on the CI box, in a year. The output depends on nothing but the two numbers you handed it. If a test over it ever fails, it fails the same way every time, and the inputs that broke it sit right there in the assertion.</p>
-<p>This property — <em>same input, same output</em> — is the foundation of DST. Everything else that I write below is an attempt to drag a concurrent, networked system back into behaving like <code>checkout_total</code>.</p>
+<p><em>Why</em> it&#39;s so easy? Because <code>checkout_total(300, 2)</code> is <em>always</em> <code>600</code>. The output depends on nothing but the two numbers passed to the function. If a test over it ever fails, it fails the same way every time, and the inputs that broke it sit right there in the assertion.</p>
+<p>This property — <em>same input, same output</em> — is the foundation of DST. Everything else coming up is to model a system back into behaving like <code>checkout_total</code>.</p>
 <p>Now here is almost the same function, with one additional line added:</p>
 <pre><code class="language-rust">use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -105,7 +105,7 @@ fn checkout_total(price: u64, qty: u64) -&gt; u64 {
     }
 }
 </code></pre>
-<p>Nobody passed the clock in, but the function reads it anyway. Now <code>checkout_total(300, 2)</code> returns <code>600</code> — usually. About one call in twenty it returns <code>300</code>. The output no longer depends only on its arguments; it depends on a <em>hidden input</em>, the wall clock, that the caller never sees and can never reproduce. A test that catches the <code>300</code> case catches it once and never again, because the nanosecond that triggered it is already gone.</p>
+<p>Now <code>checkout_total(300, 2)</code> returns <code>600</code> usually. About one call in twenty it returns <code>300</code>. The output no longer depends only on its arguments; it depends on a <em>hidden input</em>, the wall clock, that the caller never sees and can never reproduce. A test that catches the <code>300</code> case catches it once and never again, because the nanosecond that triggered it is already gone.</p>
 <p>The fix is simple: stop <em>reading</em> the hidden input and start <em>passing</em> it.</p>
 <pre><code class="language-rust">fn checkout_total(price: u64, qty: u64, now_nanos: u128) -&gt; u64 {
     let subtotal = price * qty;
@@ -122,37 +122,32 @@ fn replays_forever() {
     assert_eq!(checkout_total(300, 2, 1_700_000_000_000_000_000), 300);
 }
 </code></pre>
-<p>The clock went from something the function <em>reaches for</em> to something the test <em>hands it</em>. The function is pure again, and the bug now has an address — the triple <code>(300, 2, 1_700…000)</code> — that you can return to as many times as you like.</p>
+<p>The clock went from something the function <em>reaches for</em> to something the test <em>hands it</em>. The function is pure again, and the bug now has the exact inputs that led to it — the triple <code>(300, 2, 1_700…000)</code>.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-pure-function-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/pure-function.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
-<p>That is the entire trick, and the rest of this post is what it costs to pull it off at scale. A single function has one hidden input; a distributed system has thousands: every <code>now()</code>, every thread, every packet that arrives just before or just after its neighbour, every <code>HashMap</code> which has a random ordering. We cannot add ten thousand parameters to a function signature by hand.</p>
+<p>That is the entire trick. A single function has one hidden input; a distributed system has thousands: every <code>now()</code>, every thread, every packet that arrives just before or just after its neighbour, every <code>HashMap</code> which has a random ordering. We cannot add ten thousand parameters to a function signature by hand.</p>
 <p>So DST runs the whole distributed system — the network, the clocks, the task scheduler, the random numbers — inside one controlled process, and replaces every source of nondeterminism with something you own and feed from a single place. That place is the <em>seed</em>.</p>
-<p>Given a seed, the run is not <em>similar</em> to a previous run with that seed; it is the same run, byte for byte, on your machine today and on a CI box forever. That is the whole idea, and it is worth being precise about why it is so much stronger than what an ordinary test gives you.</p>
 <blockquote>
 <p>Same seed implies the same execution implies the same result. Always.</p>
 </blockquote>
-<p>An ordinary integration test samples <em>one</em> accidental interleaving. You spin up a few nodes, stress test them, and whatever the OS scheduler, the wall clock, and the kernel&#39;s socket buffers happened to do that millisecond is the timeline you tested. Run it again and you get a different timeline. When something breaks once in a thousand runs (as you may have seen in many jepsen reports), you get a stack trace you can never visit again. It just sits in the flaky-test department.</p>
 <h3 id="what-is-a-seed">What a seed actually is</h3>
-<p>This is one of those terms that you will keep seeing in DST discussions, and here is how to grasp the intuition behind it.</p>
-<p>Computers are deterministic machines. Given the same inputs, they&#39;ll produce the same outputs every time. So when a program asks for a &quot;random&quot; number, it&#39;s usually getting one from a deterministic algorithm called a pseudo-random number generator.</p>
+<p>Computers are deterministic machines. Given the same inputs, they&#39;ll produce the same outputs every time. So when a program asks for a &quot;random&quot; number, it&#39;s usually getting one from a deterministic algorithm called a pseudo-random number generator (PRNG).</p>
 <p>A PRNG keeps some internal state and uses it to generate the next number in a sequence. Start it with the same seed and you&#39;ll get the exact same sequence every time. The numbers may look random, but they&#39;re completely reproducible—which turns out to be exactly what DST wants.</p>
-<p>A <em>seed</em>, then, is just the starting point for that sequence. A single u64 determines an entire stream of seemingly random choices.</p>
+<p>A <em>seed</em>, then, is just the starting point for that sequence.</p>
 <p>The important thing to understand is that the seed is only one piece of the puzzle. A DST engine is deterministic because it takes control of the things that are normally left up to the operating system: packet delivery order, timer execution, task scheduling, network faults, and so on. Once those decisions are made by the simulator instead of the outside world, the execution becomes reproducible.</p>
 <pre><code class="language-rust">DST_SEED=&lt;n&gt; cargo test &lt;name&gt;
 </code></pre>
 <p>The seed simply gives the simulator a way to explore different executions while keeping each one replayable. Change the seed and you may get a different schedule, different faults, or a different delivery order. Keep the seed the same and the simulator can reconstruct the same execution again.</p>
-<p>Drag the right-hand seed below: watch two runs land on the identical fingerprint, then flip one bit of the seed and watch them split into entirely different universes.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-same-seed-replay-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/same-seed-replay.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
 <h3 id="sources">Where nondeterminism enters the system</h3>
-<p>Nondeterminism is anything the program reads that is not part of those inputs — values supplied by the environment rather than the seed.</p>
-<p>In practice, it shows up through a small number of channels:</p>
+<p>Nondeterminism is anything the program reads that is not part of those inputs — values supplied by the environment rather than the seed. It can show up in:</p>
 <ol>
-<li><p><strong>Concurrency</strong>. Which task runs next is chosen by the OS scheduler, and on multicore systems execution is genuinely interleaved in different ways each run.</p>
+<li><p><strong>Concurrency</strong>. Which task runs next is chosen by the OS scheduler, and on multicore systems execution is interleaved in different ways each run.</p>
 </li>
 <li><p><strong>Time</strong>. Calls to the system clock (now, Instant, clock_gettime) return values that change across runs, affecting timeouts, retries, leases, and scheduling logic.</p>
 </li>
@@ -163,7 +158,7 @@ fn replays_forever() {
 <li><p><strong>Iteration order</strong>. Data structures like hash maps and hash sets may randomize iteration order using OS entropy.</p>
 </li>
 </ol>
-<p>All five share the same property: the value is produced outside the process, while the seed lives inside it. That boundary is what makes reproducibility fail.</p>
+<p>The randomness and uncontrollable aspects is what makes reproducibility fail.</p>
 <h3 id="the-heartbeat">The simulator</h3>
 <p>Once those sources are identified, the simulator’s role is to pull them inside the process and make them explicitly driven by a seed. Most systems reduce execution to a single deterministic driver loop — a “heartbeat” that advances virtual time and resolves all state transitions:</p>
 
@@ -173,7 +168,7 @@ fn replays_forever() {
 <p>At each tick, the loop:</p>
 <ul>
 <li>delivers messages scheduled for the current virtual time</li>
-<li>decides which tasks run next (under a fixed policy)</li>
+<li>decides which tasks run next</li>
 <li>advances virtual time explicitly</li>
 <li>steps all active nodes</li>
 <li>records an execution log or hash</li>
@@ -184,13 +179,9 @@ fn replays_forever() {
 <li>there is no background execution</li>
 <li>all scheduling decisions are made explicitly per tick</li>
 </ul>
-<p>In many implementations, this loop runs on a single thread because it makes it easier to enforce a strict and reproducible ordering of events. Some systems also use sandboxed runtimes like WebAssembly to isolate user code and further reduce accidental sources of nondeterminism from the host environment.</p>
-<h3 id="one-process">Running the system in one process</h3>
-<p>Once all nondeterministic channels are identified, they only become controllable if they live inside the same process as the seed.</p>
-<p>That leads to the central design choice:</p>
-<blockquote>
-<p>The distributed system is simulated as a single process that owns time, scheduling, randomness, and I/O.</p>
-</blockquote>
+<p>In many implementations, this loop runs on a single thread because it makes it easier to enforce a strict and reproducible ordering of events. Some systems also use runtimes like WASM to isolate user code and further reduce accidental sources of nondeterminism from the host environment.</p>
+<h3 id="one-process">Why run the system in one process</h3>
+<p>The nondeterministic channels become controllable only if they live inside the same process as the seed. This makes it easy to simulate the distributed system as a single process that owns time, scheduling, randomness, and I/O.</p>
 <p>Each external source becomes an internal component:</p>
 <ul>
 <li>scheduler → deterministic run queue</li>
@@ -211,9 +202,9 @@ fn replays_forever() {
 </section>
 
 <section class="sec">
-<h2 id="tokio-tick">Building upon Tokio: how to advances time</h2>
+<h2 id="tokio-tick">Building upon Tokio</h2>
 <p>The previous sections reduced deterministic simulation to a heartbeat: deliver due messages, choose which tasks run, advance virtual time, and record what happened. That loop is easy to draw. The harder part is making ordinary async Rust code obey it without asking every application to rewrite its timers, retries, heartbeats, and timeouts from scratch.</p>
-<p>This is where we lean on Tokio instead of replacing it. Madsim rebuilds the async runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.</p>
+<p>This is where we lean on Tokio instead of replacing it. Madsim rebuilds the runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.</p>
 <h3 id="the-node-runtime">The runtime each node gets</h3>
 <p>Every simulated host or client gets its own <code>NodeRuntime</code>. That runtime is current-thread, time-enabled, and started with Tokio time paused:</p>
 <pre><code class="language-rust">fn build_runtime(sim_seed: u64, node_name: &amp;str) -&gt; Result&lt;Runtime, Error&gt; {
@@ -239,7 +230,6 @@ fn replays_forever() {
         .map_err(|e: std::io::Error| Error::Io(e.to_string()))
 }
 </code></pre>
-<p>The four takeaways:</p>
 <ul>
 <li><code>new_current_thread</code> gives the node one executor thread, so Tokio is not racing work across a pool of OS-scheduled workers. </li>
 <li><code>enable_time</code> installs Tokio&#39;s timer driver. </li>
@@ -253,13 +243,13 @@ fn replays_forever() {
 <h3 id="where-now-comes-from">Where Tokio <code>now()</code> comes from</h3>
 <p>On an ordinary runtime, <code>tokio::time::Instant::now()</code> eventually follows the host&#39;s monotonic clock. On a paused Tokio runtime, it reads a value stored inside Tokio&#39;s clock state.</p>
 <p>In Tokio&#39;s <code>test-util</code> build, the clock stores a base <code>std::time::Instant</code>. When the clock is paused, Tokio clears the <code>unfrozen</code> field. After that, <code>tokio::time::Instant::now()</code> returns the stored base instant instead of adding host elapsed time. The base instant changes only when Tokio advances it, either through an explicit advance or through Tokio&#39;s paused-time auto-advance path.</p>
-<p>That is the first key handoff: a node calling <code>tokio::time::Instant::now()</code> is not reading the machine&#39;s live clock. It is reading a value owned by that node&#39;s Tokio runtime.</p>
+<p>So a node calling <code>tokio::time::Instant::now()</code> is not reading the machine&#39;s live clock. It is reading a value owned by that node&#39;s Tokio runtime.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-paused-clock-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/paused-clock.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
 <h3 id="how-a-node-tick-advances-time">Advancing a node with a sleep fence</h3>
-<p>Once Tokio time is paused, DST can advance a node by awaiting a timer inside that node&#39;s runtime. The core of <code>NodeRuntime::tick</code> is small:</p>
+<p>Once Tokio time is paused, we can advance a node by awaiting a timer inside that node&#39;s runtime. The core of <code>NodeRuntime::tick</code> is small:</p>
 <pre><code class="language-rust">pub fn tick(&amp;mut self, duration: Duration) -&gt; Result&lt;bool, Error&gt; {
     if self.crashed || self.finished {
         return Ok(self.finished);
@@ -344,29 +334,6 @@ fn replays_forever() {
 <h3 id="raw-clock-boundary">The raw-clock boundary</h3>
 <p><code>start_paused(true)</code> controls Tokio APIs: <code>tokio::time::sleep</code>, <code>timeout</code>, <code>interval</code>, and <code>tokio::time::Instant::now()</code>. It does not automatically virtualize every clock read in the process.</p>
 <p>A dependency that calls <code>std::time::Instant::now()</code>, <code>SystemTime::now()</code>, or raw <code>clock_gettime</code> can still reach the host clock. DST&#39;s optional Unix <code>os-clock-hooks</code> close part of that gap by interposing <code>clock_gettime</code> while execution is inside a node context. Those hooks return the published <code>TickContext::elapsed</code> for monotonic clocks and <code>wall_epoch + elapsed</code> for realtime clocks. Outside node context, or without the hooks, raw clock reads fall back to the host.</p>
-<p>One subtle point follows from the previous subsection: the hook publishes harness time, not the private Tokio time of whichever node happens to be running. That is intentional. Raw OS clocks are process-level APIs, so DST answers them from the process-level simulation clock.</p>
-<h3 id="startup-alignment">Startup alignment is a warm-up, not a barrier</h3>
-<p>DST also runs a small initialization window after spawning a node task:</p>
-<pre><code class="language-rust">pub(crate) const INIT_ALIGN: Duration = Duration::from_millis(1);
-
-fn spawn_and_init(tokio: &amp;Runtime, local: &amp;LocalSet, fut: NodeTask) -&gt; JoinHandle&lt;NodeResult&gt; {
-    tokio.block_on(local.run_until(async {
-        let handle = tokio::task::spawn_local(fut);
-        tokio::time::sleep(Self::INIT_ALIGN).await;
-        handle
-    }))
-}
-</code></pre>
-<p>After each host, client, or bounced host is spawned, DST accounts for that warm-up on the shared simulation clock:</p>
-<pre><code class="language-rust">fn account_init_align(&amp;mut self) {
-    self.ctx.borrow_mut().elapsed += NodeRuntime::INIT_ALIGN;
-
-    #[cfg(all(feature = &quot;os-clock-hooks&quot;, unix))]
-    crate::os_hooks::publish_sim_elapsed(self.ctx.borrow().elapsed);
-}
-</code></pre>
-<p>It is tempting to describe this as putting every node on the same starting line, but the code gives a narrower guarantee. It gives each spawned node the same one-millisecond Tokio warm-up and keeps the shared simulation clock, and optional clock-hook state, in sync with that warm-up.</p>
-<p>It is not a magic barrier. A future that never yields can still monopolize its poll. Initialization that performs network I/O is observable because <code>send_to</code> stamps packets with the current <code>ctx.elapsed</code>. The useful invariant is: well-behaved node tasks get a deterministic warm-up window to reach an async wait point before the main simulation loop starts stepping them.</p>
 <h3 id="tokio-internals">Where Tokio can still choose</h3>
 <p>Paused time removes host time from Tokio timers, but the runtime can still make scheduling choices. DST either eliminates those choices by construction or pins them to the seed.</p>
 <p>The first choice is worker scheduling. <code>new_current_thread</code> is a requirement, not a preference. A multi-threaded runtime has worker queues and work stealing; two ready tasks can be polled in different orders depending on which OS worker gets scheduled first. A current-thread runtime has one worker and one local scheduling context, so there is no worker race inside a node.</p>
@@ -375,7 +342,7 @@ fn spawn_and_init(tokio: &amp;Runtime, local: &amp;LocalSet, fut: NodeTask) -&gt
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/work-stealing.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
 <p>The second choice is <code>tokio::select!</code>. By default, <code>select!</code> does not always poll branches top-to-bottom. The macro generates a pseudo-random starting branch so a loop does not structurally favor the first branch forever. That is good production fairness and bad replay unless the randomness is controlled.</p>
-<p>DST&#39;s optional <code>tokio-rng-seed</code> path controls it by deriving a node-specific seed and passing it to Tokio&#39;s <code>Builder::rng_seed</code>. Because that builder method is behind <code>tokio_unstable</code>, this is not a normal stable Tokio setting. Without it, use <code>biased;</code> only when fixed branch priority is intentionally part of the model, or move the choice into an explicitly seeded simulator primitive.</p>
+<p>DST controls it by deriving a node-specific seed and passing it to Tokio&#39;s <code>Builder::rng_seed</code>.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-select-seed-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/select-seed.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
@@ -434,7 +401,7 @@ fn spawn_and_init(tokio: &amp;Runtime, local: &amp;LocalSet, fut: NodeTask) -&gt
 </section>
 
 <section class="sec">
-<h2 id="testing-tapir">Using it inside enterprise to test TAPIR</h2>
+<h2 id="testing-tapir">Using it to test our Distributed KV Store</h2>
 <p>A deterministic simulator is only useful if the system under test can be placed inside it without rewriting the system.</p>
 <p>That starts with a design choice that is worth making even before DST exists: the core code should talk to the outside world through interfaces. Networking, storage, time, randomness, and background execution should sit behind seams that can be swapped. In production, those seams point at the real implementation. In tests, they can point at a controlled one.</p>
 <p>That is what made the TAPIR simulation practical. The replica code did not need a separate &quot;simulation version&quot;. It already sent messages through a transport boundary, so the simulator only had to replace the transport underneath it.</p>
@@ -548,15 +515,10 @@ struct FaultProfile {
 </code></pre>
 <p>This is enough detail for the reader. We do not need to walk through every internal message or recovery path. The important idea is that DST separates the pressure from the judgment: the fault profile creates possible executions, and the invariants define what must hold across all of them.</p>
 <h3 id="tapir-replay">Replay is the payoff</h3>
-<p>When a run fails, the debugging loop should be boring:</p>
+<p>When a run fails, the debugging loop is simple:</p>
 <pre><code class="language-bash">DST_SEED=&lt;failing-seed&gt; cargo test &lt;test-name&gt;
 </code></pre>
-<p>The same seed reconstructs the same world: the same packet delays, the same node crashes, the same timer deadlines, the same partitions, and the same assertion failure.</p>
-
-<figure class="fig"><div class="dst-mount" id="w-same-seed-replay-2"></div>
-  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/same-seed-replay.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
-
-<p>That is the point of using DST here. The simulator is not a separate model of TAPIR. It is the same core code placed behind replaceable interfaces, driven by virtual time, a simulated network, seeded faults, and replayable invariants.</p>
+<p>That is the point of using DST here. The simulator is not a separate model of our KV store TAPIR. It is the same core code placed behind replaceable interfaces, driven by virtual time, a simulated network, seeded faults, and replayable invariants.</p>
 <blockquote>
 <p>The protocol stays the protocol. The world around it becomes deterministic.</p>
 </blockquote>
@@ -652,7 +614,6 @@ struct FaultProfile {
     try { if(window.DSTTapirCommit) DSTTapirCommit.init('w-tapir-commit-1'); } catch (e) { console.error('tapir-commit (w-tapir-commit-1) failed:', e); }
     try { if(window.DSTHostClientLifetime) DSTHostClientLifetime.init('w-host-client-lifetime-1'); } catch (e) { console.error('host-client-lifetime (w-host-client-lifetime-1) failed:', e); }
     try { if(window.DSTRollingClog) DSTRollingClog.init('w-rolling-clog-1'); } catch (e) { console.error('rolling-clog (w-rolling-clog-1) failed:', e); }
-    try { if(window.DSTSameSeedReplay) DSTSameSeedReplay.init('w-same-seed-replay-2'); } catch (e) { console.error('same-seed-replay (w-same-seed-replay-2) failed:', e); }
   });
   document.getElementById('theme').addEventListener('click',function(){var h=document.documentElement;h.setAttribute('data-mode',h.getAttribute('data-mode')==='dark'?'light':'dark');});
 </script>

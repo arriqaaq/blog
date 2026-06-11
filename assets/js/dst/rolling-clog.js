@@ -4,6 +4,18 @@
  * one-by-one in a seeded "clog" order (LinkState::Hold — parked packets buffer with glow, NOT
  * dropped), then RELEASEs them in a DIFFERENT seeded order so the jam clears asymmetrically
  * (LinkState::Healthy again — parked packets burst out). Same seed ⇒ same wave.
+ *
+ * Source: dst crate, src/patterns/swizzle_clog.rs. NotStarted shuffles the source nodes
+ * (candidates.shuffle(rng.inner_mut()), L46), holds every resulting pair in array order during
+ * Clogging (sim.hold, L79), then Unclogging RE-SHUFFLES that exact clogged list for the release
+ * order (unclog_order = clogged.clone(), L84; unclog_order.shuffle(rng.inner_mut()), L85) and
+ * sim.release()s in the new order (L104). Both shuffles draw from ONE seeded Prng, so the seed
+ * pins down BOTH the clog sequence and the (different) release sequence. LinkState is
+ * { Healthy, Hold, Partitioned } (src/topology/link.rs L19-22); Hold buffers packets in a
+ * VecDeque (L21) and release() drains them back (L112-119) rather than dropping. This widget is a
+ * SIMPLIFIED re-skin: it models a ring of N neighbour links and uses two fresh seeded shuffles of
+ * [0..N] (one mulberry32 stream) for the clog and release orders — so the seed reproduces both
+ * differing orders, the same way one Prng pins both orders in the real pattern.
  * Exposes window.DSTRollingClog.init(containerId).
  */
 (function () {
@@ -15,8 +27,8 @@
 
   const W = 780, Hh = 300;
   const N = 5;                       // ring of 5 nodes
-  const CX = 250, CY = 150, R = 108; // ring geometry
-  const NR = 26;                     // node radius
+  const CX = 168, CY = 168, R = 96;  // ring geometry (left side)
+  const NR = 24;                     // node radius
 
   // node i sits at angle around the ring (start at top, go clockwise)
   const ang = (i) => -Math.PI / 2 + (i * 2 * Math.PI) / N;
@@ -25,12 +37,13 @@
   // link l connects node l to node (l+1)%N
   const linkA = (l) => l;
   const linkB = (l) => (l + 1) % N;
+  const linkLabel = (l) => `n${linkA(l)}–n${linkB(l)}`;
   // midpoint of a link, nudged outward so the buffer chip sits clear of the ring
   function linkMid(l) {
     const ax = nx(linkA(l)), ay = ny(linkA(l)), bx = nx(linkB(l)), by = ny(linkB(l));
     const mx = (ax + bx) / 2, my = (ay + by) / 2;
     const ox = mx - CX, oy = my - CY; const len = Math.hypot(ox, oy) || 1;
-    return { x: mx + (ox / len) * 22, y: my + (oy / len) * 22, mx, my };
+    return { x: mx + (ox / len) * 20, y: my + (oy / len) * 20, mx, my };
   }
 
   // Fisher–Yates shuffle driven by a seeded mulberry32 — deterministic per seed.
@@ -39,6 +52,10 @@
     for (let i = N - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
     return a;
   }
+
+  // ── order-strip geometry (right column: shows the two seeded sequences) ──
+  const ORD = { x: 360, w: 400, cellW: 52, cellH: 30, gap: 8 };
+  const cellX = (slot) => ORD.x + 86 + slot * (ORD.cellW + ORD.gap);
 
   function init(containerId) {
     const root = document.getElementById(containerId); if (!root) return;
@@ -55,8 +72,6 @@
     let svg, content, anim, logBody, c;
     const dur = (ms) => ms / st.speed;
 
-    build();
-
     function controls() {
       return `<div class="dstk-tgroup">
         <button class="dstk-btn dstk-btn--purple t-step">⏭ Step</button>
@@ -71,12 +86,13 @@
 
     function build() {
       root.innerHTML = K.container({
-        title: 'RollingNetworkClog', sub: 'the swizzle-clog wave clears out of order',
+        title: 'Links clog in one order and clear in another — same seed replays the exact wave',
+        sub: 'a ring of 5 links · hold them, then release them',
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
-        stats: [{ id: 'clogged', label: 'clogged' }, { id: 'released', label: 'released' }],
-        cap: 'A swizzle-clog <em>holds</em> links (not drops) in one seeded order, then releases them in a ' +
-          'different one — so the jam clears asymmetrically. The interesting bugs live in recovery from ' +
-          'partial connectivity, not in the failure itself.',
+        stats: [{ id: 'held', label: 'links held' }, { id: 'cleared', label: 'links cleared' }],
+        cap: 'A link can be <em>held</em> (jammed — packets park, nothing dropped) or <em>clear</em>. '
+          + 'The wave holds all 5 links in one seeded order, then clears them in a <em>different</em> seeded '
+          + 'order — so the jam unwinds asymmetrically. Re-run with the same seed and you get the exact same wave.',
       });
       c = K.palette();
       svg = root.querySelector('.dstk-svg');
@@ -84,15 +100,17 @@
       anim = svg.querySelector('.anim');
       logBody = root.querySelector('.dstk-log-body');
       regen();
-      drawScene(); bind(); render();
+      drawScene(); bind(); render(); setPhase(-1);
+      K.addLog(logBody, '🌱 ready — seed ' + st.seed + ' · Step to start the wave', 'hl');
     }
 
     // Build the deterministic two-phase script from the seed.
+    // Both shuffles draw from ONE seeded stream (mirrors the real pattern: one Prng shuffles the
+    // nodes that get clogged, then re-shuffles the clogged list to pick the release order).
     function regen() {
-      const r1 = K.rng(st.seed >>> 0);
-      const r2 = K.rng((st.seed >>> 0) ^ 0x9e3779b9);   // distinct stream ⇒ different order
-      st.clogOrder = shuffled(r1);
-      st.releaseOrder = shuffled(r2);
+      const r = K.rng(st.seed >>> 0);
+      st.clogOrder = shuffled(r);
+      st.releaseOrder = shuffled(r);   // second draw from the same stream ⇒ different order
       st.script = st.clogOrder.map((l) => ({ op: 'hold', link: l }))
         .concat(st.releaseOrder.map((l) => ({ op: 'release', link: l })));
       st.links = Array.from({ length: N }, () => 'healthy');
@@ -102,21 +120,39 @@
     function id(k, i) { return `${uid}-${k}-${i}`; }
     function E(k, i) { return svg.querySelector('#' + CSS.escape(id(k, i))); }
 
+    // ── phase strip: ① clog → ② release (lights up as the wave runs) ──
+    const PHASES = [
+      { t: '① clog: hold links', zone: 'amber' },
+      { t: '② release: clear links', zone: 'green' },
+    ];
+    const PX = { x0: 20, y: 14, w: 168, h: 26, gap: 12 };
+    const phaseX = (i) => PX.x0 + i * (PX.w + PX.gap);
+
     function drawScene() {
       content.innerHTML = '';
+
+      // phase pills across the top
+      PHASES.forEach((p, i) => {
+        K.el('rect', { id: id('pill', i), x: phaseX(i), y: PX.y, width: PX.w, height: PX.h, rx: 7,
+          fill: 'none', stroke: c.separator, 'stroke-width': 1.4 }, content);
+        K.el('text', { id: id('pilltext', i), x: phaseX(i) + PX.w / 2, y: PX.y + PX.h / 2 + 4,
+          'text-anchor': 'middle', fill: c.muted, 'font-size': 11.5, 'font-weight': 700 }, content).textContent = p.t;
+        if (i < PHASES.length - 1) K.el('text', { x: phaseX(i) + PX.w + PX.gap / 2, y: PX.y + PX.h / 2 + 4,
+          'text-anchor': 'middle', fill: c.muted, 'font-size': 12 }, content).textContent = '→';
+      });
+
       // links first (under the nodes)
       for (let l = 0; l < N; l++) {
         const ax = nx(linkA(l)), ay = ny(linkA(l)), bx = nx(linkB(l)), by = ny(linkB(l));
         K.el('line', { id: id('link', l), x1: ax, y1: ay, x2: bx, y2: by,
-          stroke: c.gray, 'stroke-width': 3, 'stroke-linecap': 'round',
-          'marker-end': K.arrow(uid, 'gray') }, content);
+          stroke: c.gray, 'stroke-width': 3, 'stroke-linecap': 'round' }, content);
         // buffer chip (parked packets) — hidden until the link is held
         const m = linkMid(l);
         const g = K.el('g', { id: id('buf', l), opacity: 0 }, content);
-        K.el('rect', { x: m.x - 17, y: m.y - 11, width: 34, height: 22, rx: 6,
+        K.el('rect', { x: m.x - 16, y: m.y - 10, width: 32, height: 20, rx: 6,
           fill: K.grad(uid, 'amber'), stroke: c.amber, 'stroke-width': 1.4 }, g);
         for (let p = 0; p < 3; p++) {
-          K.el('circle', { id: id('park', l * 10 + p), cx: m.x - 9 + p * 9, cy: m.y, r: 3.4,
+          K.el('circle', { id: id('park', l * 10 + p), cx: m.x - 8 + p * 8, cy: m.y, r: 3.2,
             fill: c.amber, filter: K.glow(uid) }, g);
         }
       }
@@ -126,42 +162,73 @@
         K.el('circle', { id: id('node', i), cx: x, cy: y, r: NR,
           fill: K.grad(uid, 'purple'), stroke: c.purple, 'stroke-width': 2 }, content);
         K.el('text', { x, y: y + 5, 'text-anchor': 'middle', fill: c.text,
-          'font-size': 14, 'font-weight': 700 }, content).textContent = 'n' + i;
+          'font-size': 13, 'font-weight': 700 }, content).textContent = 'n' + i;
       }
-      // legend panel on the right
-      const lx = 470, ly = 40;
-      K.el('text', { x: lx, y: ly, fill: c.muted, 'font-size': 11, 'font-weight': 700 }, content).textContent = 'LinkState';
-      const leg = [['Healthy', c.gray], ['Hold (clogged)', c.amber], ['Released', c.green]];
-      leg.forEach((row, i) => {
-        const ry = ly + 20 + i * 22;
-        K.el('line', { x1: lx, y1: ry, x2: lx + 26, y2: ry, stroke: row[1], 'stroke-width': 3, 'stroke-linecap': 'round' }, content);
-        K.el('text', { x: lx + 34, y: ry + 4, fill: c.text, 'font-size': 11 }, content).textContent = row[0];
+
+      // ── the two seeded order-strips (the whole point: they DIFFER) ──
+      drawOrderStrip(0, 'hold order', st.clogOrder, 'amber');
+      drawOrderStrip(1, 'clear order', st.releaseOrder, 'green');
+
+      // loud verdict banner under the strips (hidden until the wave completes)
+      const vg = K.el('g', { id: id('verdict', 0), opacity: 0 }, content);
+      K.el('rect', { id: id('vbox', 0), x: ORD.x, y: 224, width: ORD.w, height: 56, rx: 9,
+        fill: K.grad(uid, 'green'), stroke: c.green, 'stroke-width': 1.6 }, vg);
+      K.el('text', { id: id('vtitle', 0), x: ORD.x + ORD.w / 2, y: 247, 'text-anchor': 'middle',
+        fill: c.green, 'font-size': 13, 'font-weight': 700 }, vg).textContent = '';
+      K.el('text', { id: id('vsub', 0), x: ORD.x + ORD.w / 2, y: 266, 'text-anchor': 'middle',
+        fill: c.muted, 'font-size': 10 }, vg).textContent = '';
+    }
+
+    // one labelled row of cells; cells fill in (with the link name) in sequence order as the wave runs
+    function drawOrderStrip(row, label, order, zone) {
+      const y = 70 + row * (ORD.cellH + 26);
+      const accent = c[zone];
+      K.el('text', { x: ORD.x, y: y + ORD.cellH / 2 + 4, fill: accent, 'font-size': 11, 'font-weight': 700 }, content)
+        .textContent = label;
+      K.el('text', { x: ORD.x, y: y - 6, fill: c.muted, 'font-size': 8.5 }, content)
+        .textContent = row === 0 ? 'seeded sequence ①' : 'seeded sequence ②';
+      for (let slot = 0; slot < N; slot++) {
+        K.el('rect', { id: id('ocell-' + row, slot), x: cellX(slot), y, width: ORD.cellW, height: ORD.cellH, rx: 5,
+          fill: c.separator, 'fill-opacity': 0.35, stroke: c.separator, 'stroke-width': 1 }, content);
+        K.el('text', { id: id('otext-' + row, slot), x: cellX(slot) + ORD.cellW / 2, y: y + ORD.cellH / 2 + 4,
+          'text-anchor': 'middle', fill: c.muted, 'font-size': 11, 'font-weight': 700,
+          'font-variant-numeric': 'tabular-nums' }, content).textContent = '';
+      }
+    }
+
+    // fill the next empty slot of a strip with the link that just changed state
+    function fillStrip(row, slot, link, zone) {
+      const r = E('ocell-' + row, slot), t = E('otext-' + row, slot), accent = c[zone];
+      r.setAttribute('fill', accent); r.setAttribute('fill-opacity', 0.18);
+      r.setAttribute('stroke', accent); r.setAttribute('stroke-width', 1.6);
+      t.setAttribute('fill', accent); t.textContent = linkLabel(link);
+      animate(r, { opacity: [0.2, 1], duration: dur(160), ease: 'out(2)' });
+    }
+
+    function setPhase(k) {
+      PHASES.forEach((p, i) => {
+        const r = E('pill', i), t = E('pilltext', i); if (!r) return;
+        const on = i === k;
+        r.setAttribute('fill', on ? K.grad(uid, p.zone) : 'none');
+        r.setAttribute('stroke', on ? c[p.zone] : c.separator);
+        r.setAttribute('stroke-width', on ? 2.2 : 1.4);
+        if (on) r.setAttribute('filter', K.glow(uid)); else r.removeAttribute('filter');
+        t.setAttribute('fill', on ? c[p.zone] : c.muted);
       });
-      // teaching code snippet (real dst idioms)
-      const codeHTML = K.highlightRust(
-        'enum LinkState { Healthy, Hold, Partitioned }\n' +
-        '// swizzle: hold links in one order ...\n' +
-        'for l in clog_order { net.set(l, LinkState::Hold); }\n' +
-        '// ... release them in a different one\n' +
-        'for l in release_order { net.set(l, LinkState::Healthy); }');
-      const fo = K.el('foreignObject', { x: 462, y: 122, width: 304, height: 150 }, content);
-      const div = document.createElement('div'); div.innerHTML = codeHTML; fo.appendChild(div);
     }
 
     function render() {
-      stat('clogged', st.clogged);
-      stat('released', st.released);
+      stat('held', st.clogged);
+      stat('cleared', st.released);
       for (let l = 0; l < N; l++) {
         const ln = E('link', l), buf = E('buf', l);
         if (st.links[l] === 'hold') {
           ln.setAttribute('stroke', c.amber);
           ln.setAttribute('stroke-dasharray', '6 5');
-          ln.setAttribute('marker-end', K.arrow(uid, 'amber'));
           buf.setAttribute('opacity', '1');
         } else {
           ln.setAttribute('stroke', c.gray);
           ln.removeAttribute('stroke-dasharray');
-          ln.setAttribute('marker-end', K.arrow(uid, 'gray'));
           buf.setAttribute('opacity', '0');
         }
       }
@@ -171,17 +238,23 @@
     // Advance one entry in the clog→release script.
     async function stepOnce() {
       if (st.busy) return false;
-      if (st.cursor >= st.script.length) {
-        K.addLog(logBody, '✓ wave complete — ring fully recovered', 'ok');
-        return false;
-      }
+      if (st.cursor >= st.script.length) { showVerdict(); return false; }
       st.busy = true; setLock(true);
-      const { op, link } = st.script[st.cursor++];
-      if (op === 'hold') await doHold(link);
-      else await doRelease(link);
+      const entry = st.script[st.cursor];
+      // light the phase pill for what we're about to do
+      setPhase(entry.op === 'hold' ? 0 : 1);
+      st.cursor++;
+      if (entry.op === 'hold') {
+        await doHold(entry.link);
+        fillStrip(0, st.clogged - 1, entry.link, 'amber');
+      } else {
+        await doRelease(entry.link);
+        fillStrip(1, st.released - 1, entry.link, 'green');
+      }
       render();
+      if (st.cursor >= st.script.length) { setPhase(-1); showVerdict(); }
       st.busy = false; setLock(false);
-      return true;
+      return st.cursor < st.script.length;
     }
 
     async function doHold(l) {
@@ -189,16 +262,15 @@
       const ln = E('link', l), buf = E('buf', l);
       ln.setAttribute('stroke', c.amber);
       ln.setAttribute('stroke-dasharray', '6 5');
-      ln.setAttribute('marker-end', K.arrow(uid, 'amber'));
       await animate(ln, { strokeWidth: [3, 6, 3.5], opacity: [1, 0.55, 1], duration: dur(260), ease: 'inOut(2)' });
       // parked packets pop into the buffer with glow
       buf.setAttribute('opacity', '1');
       animate(buf, { opacity: [0, 1], duration: dur(180), ease: 'out(2)' });
       for (let p = 0; p < 3; p++) {
         const dot = E('park', l * 10 + p);
-        animate(dot, { r: [0, 3.4], duration: dur(220), delay: p * 60, ease: 'out(2)' });
+        animate(dot, { r: [0, 3.2], duration: dur(220), delay: p * 60, ease: 'out(2)' });
       }
-      K.addLog(logBody, `HOLD link n${linkA(l)}↔n${linkB(l)} — packets parked (not dropped)`, 'warn');
+      K.addLog(logBody, `① hold ${linkLabel(l)} — jammed, packets park (not dropped)`, 'warn');
     }
 
     async function doRelease(l) {
@@ -206,21 +278,27 @@
       // released link flashes green
       ln.setAttribute('stroke', c.green);
       ln.removeAttribute('stroke-dasharray');
-      ln.setAttribute('marker-end', K.arrow(uid, 'green'));
       animate(ln, { strokeWidth: [3.5, 6, 3], opacity: [1, 0.6, 1], duration: dur(300), ease: 'out(2)' });
       // parked packets burst out toward both endpoints
       const burst = [];
       for (let p = 0; p < 3; p++) {
         const tgt = p % 2 === 0 ? linkA(l) : linkB(l);
-        burst.push(fly(m.x - 9 + p * 9, m.y, nx(tgt), ny(tgt), c.green, p * 50));
+        burst.push(fly(m.x - 8 + p * 8, m.y, nx(tgt), ny(tgt), c.green, p * 50));
       }
       animate(buf, { opacity: [1, 0], duration: dur(240), ease: 'out(2)' });
       await Promise.all(burst);
       st.links[l] = 'healthy'; st.released++;
       ln.setAttribute('stroke', c.gray);
-      ln.setAttribute('marker-end', K.arrow(uid, 'gray'));
       flashNode(linkA(l)); flashNode(linkB(l));
-      K.addLog(logBody, `RELEASE link n${linkA(l)}↔n${linkB(l)} — jam drains`, 'ok');
+      K.addLog(logBody, `② clear ${linkLabel(l)} — jam drains, link healthy`, 'ok');
+    }
+
+    function showVerdict() {
+      const g = E('verdict', 0); if (!g || +g.getAttribute('opacity') === 1) return;
+      E('vtitle', 0).textContent = '✓ same seed → same hold order AND same clear order';
+      E('vsub', 0).textContent = 'two different seeded sequences, one reproducible wave — Reset and re-run to replay it exactly';
+      animate(g, { opacity: [0, 1], duration: dur(360), ease: 'out(2)' });
+      K.addLog(logBody, '✓ wave complete — seed ' + st.seed + ' replays this exact hold+clear wave', 'ok');
     }
 
     async function fly(sx, sy, tx, ty, color, dl) {
@@ -254,13 +332,14 @@
     function reset() {
       st.playing = false; pp();
       regen(); st.busy = false; setLock(false);
-      drawScene(); render();
+      drawScene(); render(); setPhase(-1);
       K.addLog(logBody, '↺ reset — seed ' + st.seed + ' · same seed ⇒ same wave', 'hl');
     }
     function pp() { root.querySelector('.t-play').disabled = st.playing; root.querySelector('.t-pause').disabled = !st.playing; }
     function setLock(b) { K.lock(root, ['.t-step', '.t-reset', '.t-seed'], b); if (!st.playing) root.querySelector('.t-play').disabled = b; }
 
-    K.addLog(logBody, '🌱 ready — seed ' + st.seed + ' · same seed ⇒ same wave', 'hl');
+    build();
+
     new MutationObserver((m) => { for (const x of m) if (x.attributeName === 'data-mode') build(); })
       .observe(document.documentElement, { attributes: true });
   }

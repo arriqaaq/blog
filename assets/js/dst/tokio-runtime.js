@@ -1,10 +1,15 @@
 /**
- * DST Tokio Runtime (dst-kit) — paused time + ticks on one current-thread runtime.
- * Builder::new_current_thread().enable_time().start_paused(true) freezes the clock: the runtime
- * polls ready tasks to exhaustion, parks with a zero-timeout I/O check, then — because the clock is
- * PAUSED and nothing else woke us — AUTO-ADVANCES virtual time straight to the next timer deadline
- * and fires that sleep waker. Wall-clock is irrelevant: sleep(1h) completes in zero real µs; virtual
- * time is a pure function of driver calls. Exposes window.DSTTokioRuntime.init(containerId).
+ * DST Tokio Runtime (dst-kit) — a paused current-thread runtime leaps over a sleep.
+ *
+ * Follows the exact code below — block_on(async { sleep(1s).await }) — through the runtime's loop,
+ * one loud phase at a time:
+ *   ① poll  — poll the task; sleep(1s) isn't done → returns Pending and arms a timer at virtual 1s;
+ *   ② park  — no ready task; the runtime parks with a zero-timeout I/O check (epoll_wait(0));
+ *   ③ leap  — the clock is PAUSED and nothing woke us, so virtual time JUMPS straight to the next
+ *             deadline (0s → 1s) — in 0 µs of real time;
+ *   ④ wake  — the 1s timer fires its waker → the task is ready → poll it → Ready(()), block_on returns.
+ * Virtual time is a pure function of these driver calls; the wall clock never moves. sleep(1h) is
+ * just as free. Exposes window.DSTTokioRuntime.init(containerId).
  */
 (function () {
   'use strict';
@@ -13,12 +18,17 @@
   const { animate } = anime;
   const K = window.DSTKit;
 
-  const W = 780, Hh = 248;
-  const QUEUE = { x: 18, y: 40, w: 214, h: 178, rowH: 28, pad: 12, max: 5 };
-  const POLLER = { x: 290, y: 64, w: 196, h: 124 };
-  const CLOCK = { x: 548, y: 40, w: 214, h: 178 };
-  // Virtual-time spans (nanoseconds) for the demo timers.
-  const SEC = 1_000_000_000;
+  const W = 780, Hh = 196, SEC = 1_000_000_000;
+  const PHASES = [
+    { t: '① poll task', zone: 'purple' },
+    { t: '② park', zone: 'blue' },
+    { t: '③ leap clock', zone: 'amber' },
+    { t: '④ wake timer', zone: 'green' },
+  ];
+  const PILL = { y: 14, h: 28, w: 174, gap: 8, x0: 14 };
+  const pillX = (i) => PILL.x0 + i * (PILL.w + PILL.gap);
+  const TASK = { x: 14, y: 58, w: 360, h: 126 };
+  const CLK = { x: 406, y: 58, w: 360, h: 126 };
 
   const SRC =
 `let rt = Builder::new_current_thread()
@@ -30,23 +40,13 @@ rt.block_on(async {
   function init(containerId) {
     const root = document.getElementById(containerId); if (!root) return;
     const uid = containerId;
-    const st = {
-      vt: 0, polls: 0, parks: 0, seq: 0,
-      // ready: tasks whose waker has fired and are queued to be polled.
-      // timers: parked sleeps keyed by virtual deadline (ns).
-      ready: [], timers: [],
-      phase: 0, // 0 poll → 1 park → 2 auto-advance → 3 wake → back to 0
-      playing: false, busy: false, speed: 1,
-    };
+    // task: state ∈ ready | pending | done ; slept = has it returned Pending once?
+    const fresh = () => ({ vt: 0, polls: 0, phase: 0, deadline: null, slept: false, state: 'ready', done: false, busy: false, playing: false, speed: 1 });
+    const st = fresh();
     let svg, content, anim, logBody, c;
     const dur = (ms) => ms / st.speed;
-    const fmtVt = (ns) => {
-      if (ns === 0) return '0 ns';
-      if (ns % SEC === 0) return (ns / SEC) + ' s';
-      if (ns >= SEC) return (ns / SEC).toFixed(3) + ' s';
-      if (ns % 1_000_000 === 0) return (ns / 1_000_000) + ' ms';
-      return ns + ' ns';
-    };
+    const E = (k) => svg.querySelector('#' + CSS.escape(`${uid}-${k}`));
+    const fmt = (ns) => ns == null ? '—' : ns === 0 ? '0 ns' : ns % SEC === 0 ? (ns / SEC) + ' s' : (ns / SEC).toFixed(3) + ' s';
 
     build();
 
@@ -57,240 +57,166 @@ rt.block_on(async {
         <button class="dstk-btn dstk-btn--ghost t-pause" disabled>⏸</button>
         <button class="dstk-btn dstk-btn--ghost t-reset">↺ Reset</button></div>
         <span class="dstk-sp"></span>
-        <div class="dstk-tgroup">
-          <button class="dstk-btn dstk-btn--amber t-spawn">+ spawn sleep(1s)</button></div>
-        <span class="dstk-tdiv"></span>
         <div class="dstk-tgroup"><span class="dstk-tlabel">speed</span>
           <select class="t-speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>`;
     }
 
     function build() {
       root.innerHTML = K.container({
-        title: 'Tokio: paused time + ticks', sub: 'time only moves when we tick it',
+        title: 'A paused runtime leaps over a sleep', sub: 'poll → park → jump the clock → wake · 0 real time',
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
-        stats: [{ id: 'vt', label: 'virtual time' }, { id: 'polls', label: 'polls' }, { id: 'parks', label: 'parks' }],
-        cap: 'start_paused(true): the runtime polls to exhaustion, parks, then leaps virtual time to the next deadline. ' +
-          'Wall-clock is irrelevant — sleep(1h) finishes in zero real µs; virtual time is a pure function of driver calls.',
+        stats: [{ id: 'vt', label: 'virtual time' }, { id: 'real', label: 'real time' }, { id: 'polls', label: 'polls' }],
+        cap: 'start_paused(true): the runtime polls to exhaustion, parks, then — because the clock is paused — '
+           + 'JUMPS virtual time straight to the next timer. Virtual time grows; the wall clock stays at 0. sleep(1h) is just as free.',
       });
       c = K.palette();
       svg = root.querySelector('.dstk-svg');
       content = svg.querySelector('.content');
       anim = svg.querySelector('.anim');
       logBody = root.querySelector('.dstk-log-body');
-      // syntax-highlighted snippet sits above the stage, injected after container build.
       const code = document.createElement('div');
       code.innerHTML = K.highlightRust(SRC);
-      const head = root.querySelector('.dstk-toolbar');
-      head.insertAdjacentElement('afterend', code.firstChild);
-      drawScene(); bind(); render();
+      root.querySelector('.dstk-toolbar').insertAdjacentElement('afterend', code.firstChild);
+      drawScene(); bind(); render(); setPhase(-1);
+      K.addLog(logBody, '🌱 paused at 0 — the task is about to be polled for the first time', 'hl');
     }
-
-    function id(k) { return `${uid}-${k}`; }
-    function E(k) { return svg.querySelector('#' + CSS.escape(id(k))); }
 
     function drawScene() {
       content.innerHTML = '';
-      // ── TASK QUEUE (purple) ───────────────────────────────────────────
-      K.el('text', { x: QUEUE.x, y: QUEUE.y - 22, fill: c.purple, 'font-size': 11, 'font-weight': 700 }, content).textContent = 'task queue';
-      K.el('text', { x: QUEUE.x, y: QUEUE.y - 9, fill: c.muted, 'font-size': 9 }, content).textContent = 'ready tasks (waker fired)';
-      K.el('rect', { id: id('qbox'), x: QUEUE.x, y: QUEUE.y, width: QUEUE.w, height: QUEUE.h, rx: 10,
-        fill: K.grad(uid, 'purple'), stroke: c.purple, 'stroke-width': 1.6 }, content);
+      // phase pills
+      PHASES.forEach((p, i) => {
+        K.el('rect', { id: `${uid}-pill-${i}`, x: pillX(i), y: PILL.y, width: PILL.w, height: PILL.h, rx: 8, fill: 'none', stroke: c.separator, 'stroke-width': 1.4 }, content);
+        K.el('text', { id: `${uid}-pt-${i}`, x: pillX(i) + PILL.w / 2, y: PILL.y + PILL.h / 2 + 4, 'text-anchor': 'middle', fill: c.muted, 'font-size': 11.5, 'font-weight': 700 }, content).textContent = p.t;
+        if (i < PHASES.length - 1) K.el('text', { x: pillX(i) + PILL.w + PILL.gap / 2, y: PILL.y + PILL.h / 2 + 4, 'text-anchor': 'middle', fill: c.muted, 'font-size': 11 }, content).textContent = '→';
+      });
 
-      // ── RUNTIME / POLLER ──────────────────────────────────────────────
-      K.el('text', { x: POLLER.x, y: POLLER.y - 22, fill: c.green, 'font-size': 11, 'font-weight': 700 }, content).textContent = 'current-thread runtime';
-      K.el('text', { x: POLLER.x, y: POLLER.y - 9, fill: c.muted, 'font-size': 9 }, content).textContent = 'poll · park · advance';
-      K.el('rect', { id: id('pbox'), x: POLLER.x, y: POLLER.y, width: POLLER.w, height: POLLER.h, rx: 10,
-        fill: K.grad(uid, 'green'), stroke: c.green, 'stroke-width': 1.6 }, content);
-      K.el('circle', { cx: POLLER.x + POLLER.w / 2, cy: POLLER.y + 40, r: 16, fill: 'none', stroke: c.green, 'stroke-width': 2 }, content);
-      K.el('text', { id: id('pstate'), x: POLLER.x + POLLER.w / 2, y: POLLER.y + 78, 'text-anchor': 'middle',
-        fill: c.text, 'font-size': 12, 'font-weight': 700 }, content).textContent = 'idle';
-      K.el('text', { id: id('psub'), x: POLLER.x + POLLER.w / 2, y: POLLER.y + 98, 'text-anchor': 'middle',
-        fill: c.muted, 'font-size': 9 }, content).textContent = 'press Step phase';
+      // TASK panel
+      K.el('rect', { id: `${uid}-tbox`, x: TASK.x, y: TASK.y, width: TASK.w, height: TASK.h, rx: 10, fill: K.grad(uid, 'purple'), stroke: c.purple, 'stroke-width': 1.6 }, content);
+      K.el('text', { x: TASK.x + 16, y: TASK.y + 24, fill: c.purple, 'font-size': 12, 'font-weight': 700 }, content).textContent = 'the task';
+      K.el('text', { x: TASK.x + TASK.w - 14, y: TASK.y + 24, 'text-anchor': 'end', fill: c.muted, 'font-size': 9.5,
+        'font-family': "ui-monospace,'SF Mono',monospace" }, content).textContent = 'sleep(1s).await';
+      K.el('text', { id: `${uid}-tstate`, x: TASK.x + 16, y: TASK.y + 78, fill: c.purple, 'font-size': 28,
+        'font-weight': 700, filter: K.glow(uid) }, content).textContent = 'ready';
+      K.el('text', { id: `${uid}-tsub`, x: TASK.x + 16, y: TASK.y + 104, fill: c.muted, 'font-size': 10 }, content).textContent = 'about to be polled';
 
-      // connector queue → poller (directional)
-      K.el('line', { x1: QUEUE.x + QUEUE.w, y1: POLLER.y + 30, x2: POLLER.x - 4, y2: POLLER.y + 30,
-        stroke: c.purple, 'stroke-width': 1.6, 'marker-end': K.arrow(uid, 'purple') }, content);
-      // connector clock → poller (timer fires waker)
-      K.el('line', { x1: CLOCK.x - 4, y1: POLLER.y + 90, x2: POLLER.x + POLLER.w + 4, y2: POLLER.y + 90,
-        stroke: c.amber, 'stroke-width': 1.6, 'marker-end': K.arrow(uid, 'amber') }, content);
-
-      // ── VIRTUAL CLOCK (amber, frozen) ─────────────────────────────────
-      K.el('text', { x: CLOCK.x, y: CLOCK.y - 22, fill: c.amber, 'font-size': 11, 'font-weight': 700 }, content).textContent = 'virtual clock';
-      K.el('text', { id: id('cstate'), x: CLOCK.x, y: CLOCK.y - 9, fill: c.muted, 'font-size': 9 }, content).textContent = 'PAUSED — frozen';
-      K.el('rect', { id: id('cbox'), x: CLOCK.x, y: CLOCK.y, width: CLOCK.w, height: CLOCK.h, rx: 10,
-        fill: K.grad(uid, 'amber'), stroke: c.amber, 'stroke-width': 1.6 }, content);
-      K.el('text', { x: CLOCK.x + 14, y: CLOCK.y + 30, fill: c.muted, 'font-size': 10 }, content).textContent = 'now() =';
-      K.el('text', { id: id('clk'), x: CLOCK.x + CLOCK.w / 2, y: CLOCK.y + 78, 'text-anchor': 'middle',
-        fill: c.amber, 'font-size': 30, 'font-weight': 700, 'font-variant-numeric': 'tabular-nums', filter: K.glow(uid) }, content).textContent = '0 ns';
-      K.el('text', { x: CLOCK.x + 14, y: CLOCK.y + 112, fill: c.muted, 'font-size': 10 }, content).textContent = 'next deadline';
-      K.el('text', { id: id('deadline'), x: CLOCK.x + 14, y: CLOCK.y + 134, fill: c.text,
-        'font-size': 14, 'font-weight': 700, 'font-variant-numeric': 'tabular-nums' }, content).textContent = '—';
-      K.el('text', { x: CLOCK.x + 14, y: CLOCK.y + 160, fill: c.muted, 'font-size': 9, 'font-style': 'italic' }, content).textContent = 'real wall-clock: 0 µs';
+      // CLOCK panel
+      K.el('rect', { id: `${uid}-cbox`, x: CLK.x, y: CLK.y, width: CLK.w, height: CLK.h, rx: 10, fill: K.grad(uid, 'amber'), stroke: c.amber, 'stroke-width': 1.6 }, content);
+      K.el('text', { x: CLK.x + 16, y: CLK.y + 24, fill: c.amber, 'font-size': 12, 'font-weight': 700 }, content).textContent = 'virtual clock';
+      K.el('text', { id: `${uid}-ctag`, x: CLK.x + CLK.w - 14, y: CLK.y + 24, 'text-anchor': 'end', fill: c.muted, 'font-size': 9.5, 'font-weight': 600 }, content).textContent = 'PAUSED';
+      K.el('text', { x: CLK.x + 16, y: CLK.y + 48, fill: c.muted, 'font-size': 10 }, content).textContent = 'now() =';
+      K.el('text', { id: `${uid}-clk`, x: CLK.x + 150, y: CLK.y + 78, 'text-anchor': 'middle', fill: c.amber, 'font-size': 34,
+        'font-weight': 700, 'font-variant-numeric': 'tabular-nums', filter: K.glow(uid) }, content).textContent = '0 ns';
+      K.el('text', { id: `${uid}-dl`, x: CLK.x + 16, y: CLK.y + 104, fill: c.text, 'font-size': 11, 'font-weight': 600 }, content).textContent = 'next timer: —';
+      K.el('text', { x: CLK.x + CLK.w - 14, y: CLK.y + 104, 'text-anchor': 'end', fill: c.green, 'font-size': 10, 'font-weight': 700 }, content).textContent = 'real wall-clock: 0 µs';
     }
 
-    function slotY(i) { return QUEUE.y + QUEUE.pad + i * QUEUE.rowH; }
+    function setPhase(k) {
+      PHASES.forEach((p, i) => {
+        const r = E('pill-' + i), t = E('pt-' + i); if (!r) return;
+        const on = i === k;
+        r.setAttribute('fill', on ? K.grad(uid, p.zone) : 'none');
+        r.setAttribute('stroke', on ? c[p.zone] : c.separator);
+        r.setAttribute('stroke-width', on ? 2.2 : 1.4);
+        if (on) r.setAttribute('filter', K.glow(uid)); else r.removeAttribute('filter');
+        t.setAttribute('fill', on ? c[p.zone] : c.muted);
+      });
+    }
+
+    function setTask(state, sub, zone) {
+      const s = E('tstate'), sub2 = E('tsub'), box = E('tbox');
+      s.textContent = state; s.setAttribute('fill', c[zone] || c.purple);
+      sub2.textContent = sub || '';
+      box.setAttribute('fill', K.grad(uid, zone || 'purple')); box.setAttribute('stroke', c[zone] || c.purple);
+    }
 
     function render() {
-      stat('vt', fmtVt(st.vt)); stat('polls', st.polls); stat('parks', st.parks);
-      E('clk').textContent = fmtVt(st.vt);
-      const next = nextDeadline();
-      E('deadline').textContent = next == null ? '— (no timers)' : fmtVt(next);
-      // rebuild ready-task chips in a sub-group
-      let g = svg.querySelector('#' + CSS.escape(id('q'))); if (g) g.remove();
-      g = K.el('g', { id: id('q') }, content);
-      if (!st.ready.length) {
-        K.el('text', { x: QUEUE.x + QUEUE.pad, y: slotY(0) + 16, fill: c.muted, 'font-size': 10, 'font-style': 'italic' }, g)
-          .textContent = '(empty — all parked)';
-      }
-      st.ready.slice(0, QUEUE.max).forEach((t, idx) => {
-        const y = slotY(idx);
-        K.el('rect', { id: id('chip-' + t.id), x: QUEUE.x + QUEUE.pad, y, width: QUEUE.w - QUEUE.pad * 2, height: QUEUE.rowH - 7,
-          rx: 5, fill: K.grad(uid, 'purple'), stroke: c.purple, 'stroke-width': 1.4 }, g);
-        K.el('text', { x: QUEUE.x + QUEUE.pad + 8, y: y + 14, fill: c.text, 'font-size': 10.5, 'font-variant-numeric': 'tabular-nums' }, g)
-          .textContent = t.label;
-      });
-      if (st.ready.length > QUEUE.max)
-        K.el('text', { x: QUEUE.x + QUEUE.pad, y: slotY(QUEUE.max) + 12, fill: c.muted, 'font-size': 9 }, g)
-          .textContent = `+${st.ready.length - QUEUE.max} more`;
+      stat('vt', fmt(st.vt)); stat('real', '0 µs'); stat('polls', st.polls);
+      E('clk').textContent = fmt(st.vt);
+      E('dl').textContent = 'next timer: ' + (st.deadline == null ? '—' : fmt(st.deadline));
     }
     function stat(k, v) { const e = root.querySelector('#' + CSS.escape(uid + '-stat-' + k)); if (e) e.textContent = v; }
-    function nextDeadline() { return st.timers.length ? Math.min(...st.timers.map((t) => t.deadline)) : null; }
 
-    function setState(s, sub, color) {
-      E('pstate').textContent = s; E('pstate').setAttribute('fill', color || c.text);
-      E('psub').textContent = sub || '';
-    }
-
-    // ── phase machine: one Step = one phase of the runtime loop ─────────
     async function stepOnce() {
-      if (st.busy) return; st.busy = true; setLock(true);
+      if (st.busy || st.done) return; st.busy = true; setLock(true);
       try {
         if (st.phase === 0) await phasePoll();
         else if (st.phase === 1) await phasePark();
-        else if (st.phase === 2) await phaseAdvance();
+        else if (st.phase === 2) await phaseLeap();
         else await phaseWake();
       } finally { st.busy = false; setLock(false); }
     }
 
-    // (1) poll ready tasks to exhaustion
+    // ① poll: the task isn't done → returns Pending and arms a timer at virtual 1s
     async function phasePoll() {
-      setState('polling', 'drain ready queue', c.green);
-      pulse(E('pbox'), c.green);
-      if (!st.ready.length) {
-        K.addLog(logBody, 'poll: ready queue already empty', 'warn');
-      } else {
-        // drain every ready task this phase (poll to exhaustion).
-        while (st.ready.length) {
-          const t = st.ready.shift();
-          st.polls++; stat('polls', st.polls);
-          await drainChip(t);
-          K.addLog(logBody, `poll: ${t.label} → ${t.completes ? 'Ready(())' : 'Pending'}`, t.completes ? 'ok' : 'hl');
-          render();
-        }
-      }
-      st.phase = 1; cue('next: park'); render();
+      setPhase(0); st.polls++; render();
+      pulse(E('tbox'), c.purple);
+      setTask('running', 'poll → runs until it hits .await', 'purple');
+      await K.delay(dur(360));
+      st.slept = true; st.deadline = st.vt + SEC; st.state = 'pending';
+      setTask('pending', 'sleep(1s) → Pending · timer armed @ ' + fmt(st.deadline), 'purple');
+      K.addLog(logBody, '① poll → sleep(1s) returns Pending; timer armed @ ' + fmt(st.deadline), 'hl');
+      st.phase = 1; render();
     }
 
-    // (2) park with a zero-timeout I/O check
+    // ② park: nothing ready; park with a zero-timeout I/O check (paused → won't actually block)
     async function phasePark() {
-      setState('parking', 'epoll_wait(timeout=0)', c.blue);
-      st.parks++; stat('parks', st.parks);
-      await pulse(E('pbox'), c.blue, 220);
-      const next = nextDeadline();
-      K.addLog(logBody, 'park: non-blocking I/O check, timeout=0 — no I/O ready', 'warn');
-      if (next == null) {
-        K.addLog(logBody, 'no timers parked — runtime is idle (spawn a sleep)', 'warn');
-        setState('idle', 'nothing to do', c.muted);
-        st.phase = 0; cue('next: poll'); render(); return;
-      }
-      st.phase = 2; cue('next: auto-advance'); render();
+      setPhase(1);
+      await pulse(E('tbox'), c.blue, 260);
+      K.addLog(logBody, '② park → epoll_wait(timeout=0): no I/O ready, no ready tasks', 'warn');
+      st.phase = 2; render();
     }
 
-    // (3) clock PAUSED + nothing woke us → auto-advance to next deadline, fire waker
-    async function phaseAdvance() {
-      const next = nextDeadline();
-      if (next == null) { st.phase = 0; cue('next: poll'); render(); return; }
-      setState('advancing', 'clock paused ⇒ leap', c.amber);
-      const from = st.vt;
-      K.addLog(logBody, `auto-advance: virtual time ${fmtVt(from)} → ${fmtVt(next)} (0 real µs)`, 'hl');
-      await leapClock(from, next);
-      st.vt = next;
-      // fire wakers for every timer at this deadline → tasks become ready
-      const fired = st.timers.filter((t) => t.deadline === next);
-      st.timers = st.timers.filter((t) => t.deadline !== next);
-      for (const t of fired) {
-        st.ready.push({ id: t.id, label: t.label + ' woke', completes: true });
-        await flyWake(t);
-        K.addLog(logBody, `fire waker: ${t.label} deadline reached @ ${fmtVt(next)}`, 'ok');
-      }
-      E('cstate').textContent = 'PAUSED — leapt';
-      st.phase = 3; cue('next: wake'); render();
+    // ③ leap: clock PAUSED + nothing woke us → jump virtual time to the next deadline, 0 real time
+    async function phaseLeap() {
+      setPhase(2);
+      const from = st.vt, to = st.deadline;
+      K.addLog(logBody, '③ clock paused & idle → JUMP virtual time ' + fmt(from) + ' → ' + fmt(to) + ' (0 real µs)', 'hl');
+      E('ctag').textContent = 'PAUSED — leapt';
+      flashStat('real');
+      await leapClock(from, to);
+      st.vt = to;
+      leapBanner('⏭ clock jumped ' + fmt(from) + ' → ' + fmt(to) + ' · 0 µs real time');
+      st.phase = 3; render();
     }
 
-    // (4) the woken task is polled and returns
+    // ④ wake: the timer fires its waker → task ready → poll → Ready(()), block_on returns
     async function phaseWake() {
-      setState('polling', 'woken task resumes', c.green);
-      pulse(E('pbox'), c.green);
-      if (!st.ready.length) {
-        K.addLog(logBody, 'wake: nothing to resume', 'warn');
-      } else {
-        while (st.ready.length) {
-          const t = st.ready.shift();
-          st.polls++; stat('polls', st.polls);
-          await drainChip(t);
-          K.addLog(logBody, `resume: ${t.label} → Ready(()) — sleep returned`, 'ok');
-          render();
-        }
-      }
-      setState('idle', 'loop complete', c.muted);
-      st.phase = 0; cue('next: poll'); render();
+      setPhase(3); st.polls++;
+      setTask('ready', 'timer fired → waker → re-queued', 'green');
+      await flyWake();
+      K.addLog(logBody, '④ timer fires waker → task ready → poll → Ready(())', 'ok');
+      st.deadline = null; st.state = 'done'; st.done = true;
+      setTask('done', 'sleep returned · block_on() returns — total real time: 0 µs', 'green');
+      render(); setPhase(-1);
+      K.addLog(logBody, '✓ done — virtual time advanced to ' + fmt(st.vt) + ', wall clock never moved', 'ok');
     }
 
-    function cue(txt) { /* psub already set per-phase; keep deadline fresh */ E('psub').textContent = txt; }
-
-    // ── animation primitives ───────────────────────────────────────────
-    function pulse(box, color, d) {
-      box.setAttribute('stroke', color);
-      return animate(box, { opacity: [1, 0.62, 1], duration: dur(d || 240), ease: 'inOut(2)' });
-    }
-    async function drainChip(t) {
-      const chip = svg.querySelector('#' + CSS.escape(id('chip-' + t.id)));
-      const sy = chip ? (+chip.getAttribute('y') + (QUEUE.rowH - 7) / 2) : slotY(0);
-      const sx = QUEUE.x + QUEUE.w - QUEUE.pad;
-      const dot = K.el('circle', { cx: sx, cy: sy, r: 6, fill: t.completes ? c.green : c.purple, filter: K.glow(uid) }, anim);
-      await animate(dot, { cx: POLLER.x + POLLER.w / 2, cy: POLLER.y + 40, duration: dur(300), ease: 'inOutQuad' });
-      await animate(dot, { r: [6, 13], opacity: [1, 0], duration: dur(150), ease: 'out(2)' });
-      dot.remove();
-    }
-    async function flyWake(t) {
-      // amber pulse travels clock → poller → queue (waker fires, task re-queued)
-      const dot = K.el('circle', { cx: CLOCK.x, cy: POLLER.y + 90, r: 6, fill: c.amber, filter: K.glow(uid) }, anim);
-      await animate(dot, { cx: POLLER.x + POLLER.w / 2, cy: POLLER.y + 90, duration: dur(280), ease: 'inOutQuad' });
-      await animate(dot, { cx: QUEUE.x + QUEUE.w / 2, cy: slotY(Math.max(0, st.ready.length - 1)) + 8, duration: dur(280), ease: 'inOutQuad' });
-      await animate(dot, { r: [6, 12], opacity: [1, 0], duration: dur(150), ease: 'out(2)' });
-      dot.remove();
-    }
+    function pulse(box, color, d) { box.setAttribute('stroke', color); return animate(box, { opacity: [1, 0.6, 1], duration: dur(d || 240), ease: 'inOut(2)' }); }
     function leapClock(a, b) {
-      const clk = E('clk');
-      // glow surge while the number leaps
-      animate(clk, { opacity: [1, 0.55, 1], duration: dur(420), ease: 'inOut(2)' });
+      const clk = E('clk'); animate(clk, { opacity: [1, 0.5, 1], duration: dur(460), ease: 'inOut(2)' });
       const p = { v: a };
-      return animate(p, {
-        v: b, duration: dur(420), ease: 'out(2)',
-        onUpdate: () => clk.textContent = fmtVt(Math.round(p.v)),
-        onComplete: () => clk.textContent = fmtVt(b),
-      });
+      return animate(p, { v: b, duration: dur(460), ease: 'out(2)', onUpdate: () => clk.textContent = fmt(Math.round(p.v)), onComplete: () => clk.textContent = fmt(b) });
     }
-
-    function spawnSleep() {
-      // schedule a far-future wake exactly 1s of VIRTUAL time past the current clock.
-      const deadline = st.vt + SEC;
-      const tid = ++st.seq;
-      st.timers.push({ id: tid, label: `task#${tid} sleep(1s)`, deadline });
-      K.addLog(logBody, `spawn: task#${tid} → sleep(1s), parks until ${fmtVt(deadline)} (virtual)`, 'hl');
-      // if we're mid-loop at idle, the next auto-advance leaps to this deadline.
-      if (st.phase === 0 || st.phase === 1) { /* will be picked up by park→advance */ }
-      render();
+    async function flyWake() {
+      const y = CLK.y + 78;
+      const dot = K.el('circle', { cx: CLK.x, cy: y, r: 6, fill: c.green, filter: K.glow(uid) }, anim);
+      await animate(dot, { cx: TASK.x + TASK.w / 2, cy: TASK.y + TASK.h / 2, duration: dur(360), ease: 'inOutQuad' });
+      flash(E('tbox'), c.green);
+      await animate(dot, { r: [6, 13], opacity: [1, 0], duration: dur(150), ease: 'out(2)' }); dot.remove();
+    }
+    function flash(b, col) { if (!b) return; const o = b.getAttribute('stroke'); b.setAttribute('stroke', col); animate(b, { opacity: [1, 0.5, 1], duration: dur(280), ease: 'inOut(2)', onComplete: () => b.setAttribute('stroke', o) }); }
+    function flashStat(k) {
+      const e = root.querySelector('#' + CSS.escape(uid + '-stat-' + k)); if (!e) return;
+      e.style.color = c.green; animate(e, { opacity: [1, 0.4, 1], duration: dur(420), ease: 'inOut(2)', onComplete: () => { e.style.color = ''; } });
+    }
+    function leapBanner(msg) {
+      const old = content.querySelector('#' + CSS.escape(uid + '-leap')); if (old) old.remove();
+      const bw = 360, bh = 30, bx = (W - bw) / 2, by = TASK.y - 2;
+      const g = K.el('g', { id: uid + '-leap', opacity: 0 }, content);
+      K.el('rect', { x: bx, y: by, width: bw, height: bh, rx: 8, fill: K.grad(uid, 'amber'), stroke: c.amber, 'stroke-width': 1.8, filter: K.glow(uid) }, g);
+      K.el('text', { x: W / 2, y: by + 20, 'text-anchor': 'middle', fill: c.amber, 'font-size': 12.5, 'font-weight': 700 }, g).textContent = msg;
+      animate(g, { opacity: [0, 1], duration: dur(200), ease: 'out(2)' });
+      animate(g, { opacity: [1, 0], delay: dur(1300), duration: dur(650), ease: 'in(2)', onComplete: () => g.remove() });
     }
 
     function bind() {
@@ -298,43 +224,18 @@ rt.block_on(async {
       root.querySelector('.t-play').onclick = play;
       root.querySelector('.t-pause').onclick = pause;
       root.querySelector('.t-reset').onclick = reset;
-      root.querySelector('.t-spawn').onclick = () => { if (!st.busy) spawnSleep(); };
       root.querySelector('.t-speed').onchange = (e) => st.speed = parseFloat(e.target.value);
     }
-    async function play() {
-      if (st.playing) return; st.playing = true; pp();
-      while (st.playing) { await stepOnce(); if (!st.playing) break; await K.delay(dur(420)); }
-    }
+    async function play() { if (st.playing || st.done) return; st.playing = true; pp(); while (st.playing && !st.done) { await stepOnce(); if (!st.playing) break; await K.delay(dur(520)); } st.playing = false; pp(); }
     function pause() { st.playing = false; pp(); }
     function reset() {
-      st.playing = false; pp();
-      st.vt = 0; st.polls = 0; st.parks = 0; st.seq = 0; st.phase = 0;
-      st.ready = []; st.timers = []; st.busy = false; setLock(false);
-      // seed two ready tasks + one parked sleep so phase 1 has something to leap to.
-      st.ready = [
-        { id: ++st.seq, label: `task#${st.seq} hello`, completes: true },
-        { id: ++st.seq, label: `task#${st.seq} setup`, completes: true },
-      ];
-      const tid = ++st.seq;
-      st.timers = [{ id: tid, label: `task#${tid} sleep(1s)`, deadline: SEC }];
-      drawScene(); render(); setState('idle', 'press Step phase', c.muted);
-      K.addLog(logBody, '↺ reset — start_paused(true) · clock frozen at 0', 'hl');
+      const sp = st.speed; Object.assign(st, fresh()); st.speed = sp;
+      pp(); setLock(false); drawScene(); render(); setPhase(-1);
+      setTask('ready', 'about to be polled', 'purple');
+      K.addLog(logBody, '↺ reset — start_paused(true), clock frozen at 0', 'hl');
     }
-    function pp() { root.querySelector('.t-play').disabled = st.playing; root.querySelector('.t-pause').disabled = !st.playing; }
-    function setLock(b) {
-      K.lock(root, ['.t-step', '.t-reset', '.t-spawn'], b);
-      if (!st.playing) root.querySelector('.t-play').disabled = b;
-    }
-
-    // initial seed
-    st.ready = [
-      { id: ++st.seq, label: `task#${st.seq} hello`, completes: true },
-      { id: ++st.seq, label: `task#${st.seq} setup`, completes: true },
-    ];
-    const tid0 = ++st.seq;
-    st.timers = [{ id: tid0, label: `task#${tid0} sleep(1s)`, deadline: SEC }];
-    render(); setState('idle', 'press Step phase', c.muted);
-    K.addLog(logBody, '🌱 ready — start_paused(true) · sleep(1h) costs 0 real µs', 'hl');
+    function pp() { root.querySelector('.t-play').disabled = st.playing || st.done; root.querySelector('.t-pause').disabled = !st.playing; }
+    function setLock(b) { K.lock(root, ['.t-step', '.t-reset'], b); if (!st.playing) root.querySelector('.t-play').disabled = b || st.done; }
 
     new MutationObserver((m) => { for (const x of m) if (x.attributeName === 'data-mode') build(); })
       .observe(document.documentElement, { attributes: true });

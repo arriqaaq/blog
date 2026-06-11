@@ -11,7 +11,8 @@
  * One Step (sim_tick = 10 ms) mirrors dst/src/sim/tick.rs exactly:
  *   (1) now = ctx.elapsed; deliver_due_packets(now): every heap packet with deliver_at <= now flies
  *       into the receiver's inbox          (tick.rs:36-38);
- *   (2) each node advances its PRIVATE Tokio clock by the tick (tick.rs:53 node loop);
+ *   (2) each node advances its PRIVATE Tokio clock by the tick: the node loop (tick.rs:53) calls
+ *       rt.tick(sim_tick) (tick.rs:60), which drives that node's own start_paused Tokio runtime;
  *   (3) a sending node stamps the packet with ctx.elapsed and pushes to the heap;
  *   (4) AFTER the node loop, ctx.elapsed += sim_tick   (tick.rs:69 — not per node).
  *
@@ -55,7 +56,7 @@
 
     function build() {
       root.innerHTML = K.container({
-        title: 'Two clocks: private Tokio vs shared sim', sub: 'the network never reads a node clock',
+        title: "Two clocks: each node's own, and one shared network clock", sub: "a message is stamped with the shared clock, not the sender's",
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
         stats: [{ id: 'step', label: 'step' }, { id: 'elapsed', label: 'ctx.elapsed' }, { id: 'flight', label: 'in-flight' }],
         cap: 'Node clocks are private (Tokio); the network runs on shared <code>TickContext::elapsed</code>.',
@@ -84,7 +85,7 @@
         K.el('circle', { cx: x + 16, cy: CARD.y + 20, r: 4.5, fill: c.purple }, content);
         K.el('text', { x: x + 28, y: CARD.y + 24, fill: c.text, 'font-size': 14, 'font-weight': 700 }, content).textContent = 'n' + i;
         K.el('text', { x: x + CARD.w - 12, y: CARD.y + 24, 'text-anchor': 'end', fill: c.muted, 'font-size': 10, 'font-weight': 600 }, content)
-          .textContent = 'private · Tokio';
+          .textContent = 'its own clock';
         K.el('text', { x: x + 14, y: CARD.y + 50, fill: c.muted, 'font-size': 10 }, content).textContent = 'tokio::time::Instant';
         K.el('text', { id: id('clk', i), x: x + 14, y: CARD.y + 88, fill: c.purple, 'font-size': 26,
           'font-weight': 700, 'font-variant-numeric': 'tabular-nums', filter: K.glow(uid) }, content).textContent = '0 ms';
@@ -96,7 +97,7 @@
         fill: K.grad(uid, 'blue'), stroke: c.blue, 'stroke-width': 1.6 }, content);
       K.el('circle', { cx: SHARED.x + 18, cy: SHARED.y + SHARED.h / 2, r: 5, fill: c.blue, filter: K.glow(uid) }, content);
       K.el('text', { x: SHARED.x + 32, y: SHARED.y + SHARED.h / 2 + 5, fill: c.text, 'font-size': 12, 'font-weight': 700 }, content)
-        .textContent = 'shared · TickContext::elapsed';
+        .textContent = 'shared clock — the whole network uses this (TickContext::elapsed)';
       K.el('text', { id: uid + '-shared', x: SHARED.x + SHARED.w - 16, y: SHARED.y + SHARED.h / 2 + 8, 'text-anchor': 'end',
         fill: c.blue, 'font-size': 24, 'font-weight': 700, 'font-variant-numeric': 'tabular-nums', filter: K.glow(uid) }, content).textContent = '0 ms';
 
@@ -151,6 +152,16 @@
       if (!box) return; const orig = box.getAttribute('stroke'); box.setAttribute('stroke', col);
       animate(box, { opacity: [1, 0.45, 1], duration: dur(260), ease: 'inOut(2)', onComplete: () => box.setAttribute('stroke', orig) });
     }
+    // loud transient banner — fires when a packet is stamped, to make the shared-vs-private point land.
+    function callout(msg) {
+      const old = By('-callout'); if (old) old.remove();
+      const bw = 420, bh = 26, bx = (W - bw) / 2, by = 168;
+      const g = K.el('g', { id: uid + '-callout', opacity: 0 }, content);
+      K.el('rect', { x: bx, y: by, width: bw, height: bh, rx: 7, fill: K.grad(uid, 'amber'), stroke: c.amber, 'stroke-width': 1.6, filter: K.glow(uid) }, g);
+      K.el('text', { x: W / 2, y: by + 17, 'text-anchor': 'middle', fill: c.amber, 'font-size': 11, 'font-weight': 700 }, g).textContent = msg;
+      animate(g, { opacity: [0, 1], duration: dur(180), ease: 'out(2)' });
+      animate(g, { opacity: [1, 0], delay: dur(1100), duration: dur(520), ease: 'in(2)', onComplete: () => g.remove() });
+    }
 
     async function stepOnce() {
       if (st.busy) return; st.busy = true; setLock(true);
@@ -168,7 +179,8 @@
         K.addLog(logBody, `deliver s${p.seq} → n${p.to} (deliver_at ${p.deliverAt} ≤ elapsed ${now})`, 'ok'); render();
       }
 
-      // (2) each node advances its PRIVATE Tokio clock by the tick — they track together on ordinary ticks (tick.rs:53).
+      // (2) each node advances its PRIVATE Tokio clock by the tick — the node loop (tick.rs:53) calls
+      //     rt.tick(sim_tick) (tick.rs:60); private and shared move by the same delta on ordinary ticks.
       for (let i = 0; i < NODES; i++) {
         const from = st.nodes[i].clock; st.nodes[i].clock = from + TICK;
         flash(E('card', i), c.purple);
@@ -180,6 +192,7 @@
           const latency = TICK + 10 + Math.floor(st.rng() * 90);   // seeded latency — deterministic via K.rng(seed)
           const pkt = { seq: ++st.seq, from: i, to, stamp: now, deliverAt: now + latency };
           st.heap.push(pkt); render();
+          callout(`n${i} sends → stamped @${now} ms (SHARED), not n${i}'s own ${st.nodes[i].clock} ms`);
           K.addLog(logBody, `n${i} send_to(n${to}): stamp = ctx.elapsed ${now} (not Tokio ${st.nodes[i].clock}); deliver_at ${pkt.deliverAt}`, 'warn');
           await fly(cardX(i) + CARD.w / 2, CARD.y + CARD.h, SHARED.x + 320, SHARED.y, c.amber, 300);
         }

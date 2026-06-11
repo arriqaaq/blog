@@ -1,13 +1,18 @@
 /**
- * DST Seeded select! ordering (built on dst-kit) — same seed, same branch, same race.
+ * DST select! branch ordering (built on dst-kit) — "run it twice: does the same branch win?"
  *
  * tokio::select! polls its branches in an order chosen by the runtime. Under an UNSEEDED
  * runtime that order is pseudo-random, so when several branches are ready at once a different
- * one can win each Run — a flaky, irreproducible race. Under a SEEDED runtime
- * (Builder::rng_seed(seed)) the poll order is a deterministic function of the seed: every Run
+ * one can win each run — a flaky, irreproducible race. Under a SEEDED runtime
+ * (Builder::rng_seed(seed)) the poll order is a deterministic function of the seed: every run
  * with the same seed visits the branches in the SAME order, the SAME branch wins, and the
- * downstream history is identical. Three branches are ready together (recv A, recv B, timer);
- * we show the poll order, the winner, and a verdict comparing this run to the first.
+ * downstream history is identical. Three branches are ready together (recv A, recv B, timer).
+ *
+ * The widget is a run-twice A/B compare: it runs the SAME select! twice (run A, run B) and asks
+ * whether run B picked the same winner as run A. Unseeded ⇒ different winner ⇒ "not replayable".
+ * Seeded ⇒ same winner ⇒ "replayable". The unseeded poll order uses the non-seeded JS random API
+ * (Math.random) on purpose, to genuinely demonstrate nondeterminism; the seeded order is drawn
+ * from K.rng(seed) so it replays identically.
  *
  * Exposes window.DSTSelectSeed.init(containerId).
  */
@@ -18,31 +23,29 @@
   const { animate } = anime;
   const K = window.DSTKit;
 
-  const W = 780, Hh = 250;
-  const BR = { y: 54, w: 220, h: 96, gap: 24, x0: 40 };
+  const W = 780, Hh = 270;
+  const BR = { y: 96, w: 220, h: 96, gap: 24, x0: 40 };
   const BRANCHES = [
     { key: 'A', label: 'recv A', expr: 'rx_a.recv()', zone: 'blue' },
     { key: 'B', label: 'recv B', expr: 'rx_b.recv()', zone: 'green' },
-    { key: 'T', label: 'timer fires', expr: 'sleep(d).await', zone: 'amber' },
+    { key: 'T', label: 'timer fires', expr: 'sleep(d)', zone: 'amber' },
   ];
   const bx = (i) => BR.x0 + i * (BR.w + BR.gap);
 
-  const SNIPPET = `let rt = Builder::new_current_thread()
-    .rng_seed(seed)   // deterministic select! poll order
-    .build();
-
-select! {
-    a = rx_a.recv() => win("A"),  // all three are ready
-    b = rx_b.recv() => win("B"),  // at the same instant
-    _ = sleep(d)     => win("T"),
-}`;
+  // Two phase pills: run A, then run B. They light up as each run resolves.
+  const PHASES = [
+    { t: 'run A', zone: 'purple' },
+    { t: 'run B', zone: 'purple' },
+  ];
+  const PILL = { y: 50, h: 26, w: 150, gap: 14, x0: 40 };
+  const pillX = (i) => PILL.x0 + i * (PILL.w + PILL.gap);
 
   function init(containerId) {
     const root = document.getElementById(containerId); if (!root) return;
     const uid = containerId;
     const st = {
-      seed: 7, seeded: true, run: 0, busy: false, speed: 1,
-      order: [0, 1, 2], winner: null, firstWinner: null, unseededTick: 0,
+      seed: 7, seeded: false, busy: false, speed: 1,
+      winA: null, winB: null, phase: -1,
     };
     let svg, content, anim, logBody, c;
     const id = (k, i) => `${uid}-${k}-${i}`;
@@ -53,41 +56,59 @@ select! {
 
     function controls() {
       return `<div class="dstk-tgroup">
-        <button class="dstk-btn dstk-btn--purple t-run">▶ Run</button>
+        <button class="dstk-btn dstk-btn--purple t-run">▶ Run twice (A &amp; B)</button>
         <button class="dstk-btn dstk-btn--ghost t-reset">↺ Reset</button></div>
         <span class="dstk-tdiv"></span>
-        <div class="dstk-tgroup"><span class="dstk-tlabel">mode</span>
-          <button class="dstk-btn dstk-btn--green t-mode">${modeLabel()}</button></div>
+        <div class="dstk-tgroup"><span class="dstk-tlabel">select!</span>
+          <button class="dstk-btn ${st.seeded ? 'dstk-btn--green' : 'dstk-btn--red'} t-mode">${modeLabel()}</button></div>
         <span class="dstk-sp"></span>
         <div class="dstk-tgroup"><span class="dstk-tlabel">seed</span>
           <input type="number" class="t-seed" value="${st.seed}" min="0"></div>
         <div class="dstk-tgroup"><span class="dstk-tlabel">speed</span>
           <select class="t-speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>`;
     }
-    function modeLabel() { return st.seeded ? 'Seeded (rng_seed)' : 'Unseeded'; }
+    function modeLabel() { return st.seeded ? 'seeded (rng_seed)' : 'unseeded (random)'; }
 
     function build() {
       root.innerHTML = K.container({
-        title: 'Seeded select! ordering', sub: 'same seed, same branch, same race',
+        title: 'select! picks a branch at random — unless you seed it',
+        sub: 'three branches ready at once · run it twice · does the same one win?',
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
-        stats: [{ id: 'run', label: 'runs' }, { id: 'winner', label: 'winner' }, { id: 'verdict', label: 'verdict' }],
-        cap: K.highlightRust(SNIPPET),
+        stats: [{ id: 'winA', label: 'run A picked' }, { id: 'winB', label: 'run B picked' }, { id: 'verdict', label: 'replayable?' }],
+        cap: 'When several select! branches are ready at once, the runtime polls them in a random '
+           + 'order and the first one polled wins. Unseeded ⇒ a different branch can win each run '
+           + '(can’t replay). Builder::rng_seed pins the order ⇒ the same branch always wins.',
       });
       c = K.palette();
       svg = root.querySelector('.dstk-svg');
       content = svg.querySelector('.content');
       anim = svg.querySelector('.anim');
       logBody = root.querySelector('.dstk-log-body');
-      drawScene(); bind(); render();
-      K.addLog(logBody, '🌱 ready — three branches ready at once · ' + modeLabel(), 'hl');
+      drawScene(); bind(); render(); setPhase(-1);
+      K.addLog(logBody, '🌱 ready — press Run to poll the branches twice · ' + modeLabel(), 'hl');
     }
 
     function drawScene() {
       content.innerHTML = '';
-      K.el('text', { x: BR.x0, y: 30, fill: c.accent, 'font-size': 12, 'font-weight': 700 }, content)
-        .textContent = 'select! { … }';
-      K.el('text', { x: BR.x0 + 96, y: 30, fill: c.muted, 'font-size': 10 }, content)
-        .textContent = 'all three branches ready — poll order decides the winner';
+      // header line
+      K.el('text', { x: BR.x0, y: 26, fill: c.accent, 'font-size': 12, 'font-weight': 700,
+        'font-family': "ui-monospace,'SF Mono',monospace" }, content).textContent = 'select! { … }';
+      K.el('text', { x: BR.x0 + 96, y: 26, fill: c.muted, 'font-size': 10 }, content)
+        .textContent = 'all three branches are ready — whichever is polled first wins';
+
+      // two run pills (A, B) that light up as each run finishes
+      PHASES.forEach((p, i) => {
+        K.el('rect', { id: id('pill', i), x: pillX(i), y: PILL.y, width: PILL.w, height: PILL.h, rx: 8,
+          fill: 'none', stroke: c.separator, 'stroke-width': 1.4 }, content);
+        K.el('text', { id: id('pilltext', i), x: pillX(i) + 14, y: PILL.y + PILL.h / 2 + 4,
+          fill: c.muted, 'font-size': 12, 'font-weight': 700 }, content).textContent = p.t;
+        K.el('text', { id: id('pillwin', i), x: pillX(i) + PILL.w - 12, y: PILL.y + PILL.h / 2 + 4,
+          'text-anchor': 'end', fill: c.muted, 'font-size': 11, 'font-weight': 700 }, content).textContent = '—';
+        if (i < PHASES.length - 1) K.el('text', { x: pillX(i) + PILL.w + PILL.gap / 2, y: PILL.y + PILL.h / 2 + 4,
+          'text-anchor': 'middle', fill: c.muted, 'font-size': 12 }, content).textContent = 'then';
+      });
+
+      // three branch cards
       for (let i = 0; i < BRANCHES.length; i++) {
         const b = BRANCHES[i], x = bx(i);
         K.el('rect', { id: id('box', i), x, y: BR.y, width: BR.w, height: BR.h, rx: 10,
@@ -95,94 +116,146 @@ select! {
         K.el('circle', { cx: x + 16, cy: BR.y + 20, r: 4.5, fill: c[b.zone] }, content);
         K.el('text', { x: x + 28, y: BR.y + 24, fill: c.text, 'font-size': 13, 'font-weight': 700 }, content)
           .textContent = b.label;
-        K.el('text', { id: id('rank', i), x: x + BR.w - 12, y: BR.y + 24, 'text-anchor': 'end',
-          fill: c.muted, 'font-size': 10, 'font-weight': 600 }, content).textContent = 'poll —';
         K.el('text', { x: x + 14, y: BR.y + 50, fill: c.muted, 'font-size': 11,
           'font-family': "ui-monospace,'SF Mono',monospace" }, content).textContent = b.expr;
-        K.el('text', { x: x + 14, y: BR.y + 70, fill: c.green, 'font-size': 10 }, content).textContent = 'ready';
-        K.el('text', { id: id('mark', i), x: x + BR.w - 14, y: BR.y + 72, 'text-anchor': 'end',
-          fill: c[b.zone], 'font-size': 16, 'font-weight': 700 }, content).textContent = '';
+        K.el('text', { x: x + 14, y: BR.y + 70, fill: c.green, 'font-size': 10 }, content).textContent = '● ready';
+        // big winner mark, set during a run
+        K.el('text', { id: id('mark', i), x: x + BR.w - 14, y: BR.y + 74, 'text-anchor': 'end',
+          fill: c[b.zone], 'font-size': 15, 'font-weight': 700 }, content).textContent = '';
       }
-      // verdict strip
-      K.el('text', { id: id('vline', 0), x: BR.x0, y: 196, fill: c.muted, 'font-size': 12 }, content).textContent = '';
-      K.el('text', { id: id('vline', 1), x: BR.x0, y: 214, fill: c.muted, 'font-size': 11 }, content).textContent = '';
+
+      // loud verdict banner (filled in after run B)
+      K.el('rect', { id: id('vbox', 0), x: BR.x0, y: 212, width: W - 2 * BR.x0, height: 40, rx: 9,
+        fill: 'none', stroke: 'none', opacity: 0 }, content);
+      K.el('text', { id: id('vline', 0), x: W / 2, y: 230, 'text-anchor': 'middle',
+        fill: c.muted, 'font-size': 14, 'font-weight': 700 }, content).textContent = '';
+      K.el('text', { id: id('vline', 1), x: W / 2, y: 246, 'text-anchor': 'middle',
+        fill: c.muted, 'font-size': 10.5 }, content).textContent = '';
+    }
+
+    function setPhase(k) {
+      PHASES.forEach((p, i) => {
+        const r = E('pill', i), t = E('pilltext', i); if (!r) return;
+        const on = i === k;
+        r.setAttribute('fill', on ? K.grad(uid, p.zone) : 'none');
+        r.setAttribute('stroke', on ? c[p.zone] : c.separator);
+        r.setAttribute('stroke-width', on ? 2.2 : 1.4);
+        if (on) r.setAttribute('filter', K.glow(uid)); else r.removeAttribute('filter');
+        t.setAttribute('fill', on ? c[p.zone] : c.muted);
+      });
     }
 
     function render() {
-      stat('run', st.run);
-      stat('winner', st.winner == null ? '—' : BRANCHES[st.winner].key);
-      const verdict = st.run < 2 ? '—' : (st.seeded ? 'identical' : 'diverged');
+      stat('winA', st.winA == null ? '—' : BRANCHES[st.winA].key);
+      stat('winB', st.winB == null ? '—' : BRANCHES[st.winB].key);
+      let verdict = '—';
+      if (st.winA != null && st.winB != null) verdict = st.winA === st.winB ? 'yes' : 'no';
       stat('verdict', verdict);
-      for (let i = 0; i < BRANCHES.length; i++) {
-        const pos = st.order.indexOf(i);
-        E('rank', i).textContent = st.winner == null ? 'poll —' : ('poll #' + (pos + 1));
-        E('rank', i).setAttribute('fill', i === st.winner ? c[BRANCHES[i].zone] : c.muted);
-        E('mark', i).textContent = st.winner == null ? '' : (i === st.winner ? '✓ win' : '');
-        const box = E('box', i);
-        box.setAttribute('stroke-width', i === st.winner ? 2.6 : 1.6);
-        box.setAttribute('stroke-dasharray', (st.winner != null && i !== st.winner) ? '4,4' : '0');
-      }
-      E('vline', 0).setAttribute('fill', verdict === 'diverged' ? c.red : (verdict === 'identical' ? c.green : c.muted));
-      E('vline', 1).setAttribute('fill', c.muted);
     }
     function stat(k, v) { const e = root.querySelector('#' + CSS.escape(uid + '-stat-' + k)); if (e) e.textContent = v; }
 
-    // Deterministic Fisher–Yates from a seeded rng → the poll order. Seeded mode reuses the
-    // seed every run (identical order). Unseeded mode mixes in a run-local nonce (order varies).
-    function pollOrder() {
-      const seed = st.seeded ? (st.seed >>> 0) : (((st.seed >>> 0) ^ (0x9e3779b1 * (++st.unseededTick))) >>> 0);
-      const r = K.rng(seed);
+    // The poll order is a shuffle of [A,B,T]; the branch polled first wins (all are ready).
+    // SEEDED: draw from K.rng(seed) — both runs use the same seed ⇒ identical order ⇒ same winner.
+    // UNSEEDED: draw from the non-seeded JS random API (Math.random) — deliberately nondeterministic,
+    //   so the order (and winner) genuinely varies run to run. This is the bug we want to show.
+    function pollWinner() {
+      const rand = st.seeded ? K.rng(st.seed >>> 0) : Math.random;
       const a = [0, 1, 2];
       for (let i = a.length - 1; i > 0; i--) {
-        const j = Math.floor(r() * (i + 1));
+        const j = Math.floor(rand() * (i + 1));
         const t = a[i]; a[i] = a[j]; a[j] = t;
       }
-      return a;
+      return a[0]; // first polled ⇒ winner
+    }
+
+    function clearMarks() {
+      for (let i = 0; i < BRANCHES.length; i++) {
+        E('mark', i).textContent = '';
+        const box = E('box', i);
+        box.setAttribute('stroke-width', 1.6);
+        box.setAttribute('stroke', c[BRANCHES[i].zone]);
+        box.removeAttribute('stroke-dasharray');
+      }
+    }
+
+    // run one of the two passes; return the winning branch index
+    async function onePass(phaseIdx, label) {
+      setPhase(phaseIdx);
+      clearMarks();
+      const winner = pollWinner();
+      // sweep all three branches (they're all ready); the first-polled one wins
+      for (let i = 0; i < BRANCHES.length; i++) await poke(i);
+      // crown the winner
+      for (let i = 0; i < BRANCHES.length; i++) {
+        const box = E('box', i);
+        if (i === winner) {
+          box.setAttribute('stroke-width', 2.8);
+          E('mark', i).textContent = '✓ won';
+        } else {
+          box.setAttribute('stroke-dasharray', '4,4');
+        }
+      }
+      await flashWin(winner);
+      E('pillwin', phaseIdx).textContent = BRANCHES[winner].key + ' won';
+      E('pillwin', phaseIdx).setAttribute('fill', c[BRANCHES[winner].zone]);
+      K.addLog(logBody, label + ': branch ' + BRANCHES[winner].key + ' won'
+        + (st.seeded ? ' (seed ' + (st.seed >>> 0) + ')' : ' (random order)'), st.seeded ? 'ok' : 'warn');
+      return winner;
     }
 
     async function run() {
       if (st.busy) return; st.busy = true; setLock(true);
-      st.order = pollOrder();
-      st.winner = null; render();
-      K.addLog(logBody, 'run ' + (st.run + 1) + ': poll order ' + st.order.map((i) => BRANCHES[i].key).join('→'), 'hl');
-      // sweep the branches in poll order; the first ready one wins (all are ready ⇒ order[0])
-      for (let p = 0; p < st.order.length; p++) {
-        const i = st.order[p];
-        await poke(i);
-        if (p === 0) { st.winner = i; await flashWin(i); }
-      }
-      st.run++;
-      if (st.firstWinner == null) st.firstWinner = st.winner;
+      resetVisual();
+      K.addLog(logBody, '▶ running the same select! twice · ' + modeLabel(), 'hl');
+
+      st.winA = await onePass(0, 'run A');
       render();
-      const cur = BRANCHES[st.winner].key;
-      const same = st.winner === st.firstWinner;
-      K.addLog(logBody, '→ branch ' + cur + ' won' + (st.seeded ? ' (seed ' + (st.seed >>> 0) + ')' : ''),
-        st.seeded ? 'ok' : 'warn');
-      if (st.run >= 2) {
-        if (st.seeded) {
-          E('vline', 0).textContent = 'verdict: identical — every run with seed ' + (st.seed >>> 0) + ' replays the same race';
-          E('vline', 1).textContent = 'first winner ' + BRANCHES[st.firstWinner].key + ' · this run ' + cur + ' · history matches';
-          K.addLog(logBody, 'verdict: identical — reproducible', 'ok');
-        } else {
-          E('vline', 0).textContent = 'verdict: diverged — poll order reshuffles each run, winner is not reproducible';
-          E('vline', 1).textContent = 'first winner ' + BRANCHES[st.firstWinner].key + ' · this run ' + cur + (same ? ' · (coincidental match)' : ' · history differs');
-          K.addLog(logBody, 'verdict: diverged — flaky race', 'err');
-        }
-        render();
-      }
+      await K.delay(dur(420));
+      st.winB = await onePass(1, 'run B');
+      render();
+
+      setPhase(-1);
+      verdict();
       st.busy = false; setLock(false);
+    }
+
+    function verdict() {
+      const same = st.winA === st.winB;
+      const v0 = E('vline', 0), v1 = E('vline', 1), vbox = E('vbox', 0);
+      if (same) {
+        v0.textContent = '✓ same branch won both runs — replayable';
+        v0.setAttribute('fill', c.green);
+        v1.textContent = st.seeded
+          ? 'seed ' + (st.seed >>> 0) + ' pins the poll order, so branch ' + BRANCHES[st.winA].key + ' always wins'
+          : 'matched by luck this time — run again and it may diverge';
+        v1.setAttribute('fill', c.muted);
+        vbox.setAttribute('stroke', c.green); vbox.setAttribute('fill', K.grad(uid, 'green'));
+      } else {
+        v0.textContent = '✗ run A picked ' + BRANCHES[st.winA].key + ', run B picked '
+          + BRANCHES[st.winB].key + ' — NOT replayable';
+        v0.setAttribute('fill', c.red);
+        v1.textContent = 'the runtime polled the branches in a different random order — '
+          + 'this race can never be reproduced';
+        v1.setAttribute('fill', c.muted);
+        vbox.setAttribute('stroke', c.red); vbox.setAttribute('fill', K.grad(uid, 'red'));
+      }
+      vbox.setAttribute('stroke-width', 1.8);
+      animate(vbox, { opacity: [0, 1], duration: dur(300), ease: 'out(2)' });
+      animate(v0, { opacity: [0, 1], duration: dur(360), ease: 'out(2)' });
+      K.addLog(logBody, same ? 'verdict: same winner — reproducible' : 'verdict: different winner — flaky race',
+        same ? 'ok' : 'err');
     }
 
     async function poke(i) {
       const box = E('box', i);
       box.setAttribute('stroke', c.accent);
-      await animate(box, { opacity: [1, 0.6, 1], duration: dur(160), ease: 'inOut(2)' });
+      await animate(box, { opacity: [1, 0.6, 1], duration: dur(150), ease: 'inOut(2)' });
       box.setAttribute('stroke', c[BRANCHES[i].zone]);
     }
     async function flashWin(i) {
       const x = bx(i) + BR.w / 2, y = BR.y + BR.h / 2;
       const dot = K.el('circle', { cx: x, cy: y, r: 8, fill: c[BRANCHES[i].zone], filter: K.glow(uid) }, anim);
-      await animate(dot, { r: [8, 26], opacity: [0.9, 0], duration: dur(360), ease: 'out(2)' });
+      await animate(dot, { r: [8, 28], opacity: [0.9, 0], duration: dur(360), ease: 'out(2)' });
       dot.remove();
     }
 
@@ -196,16 +269,22 @@ select! {
         btn.textContent = modeLabel();
         btn.className = 'dstk-btn ' + (st.seeded ? 'dstk-btn--green' : 'dstk-btn--red') + ' t-mode';
         resetState();
-        K.addLog(logBody, 'mode → ' + modeLabel() + (st.seeded ? ' · runs will replay identically' : ' · runs will diverge'), 'hl');
+        K.addLog(logBody, 'select! → ' + modeLabel()
+          + (st.seeded ? ' · runs replay identically' : ' · runs may diverge'), 'hl');
       };
       root.querySelector('.t-seed').onchange = (e) => { st.seed = parseInt(e.target.value, 10) || 0; resetState(); K.addLog(logBody, 'seed = ' + (st.seed >>> 0), 'hl'); };
       root.querySelector('.t-speed').onchange = (e) => { st.speed = parseFloat(e.target.value); };
     }
 
-    function resetState() {
-      st.run = 0; st.winner = null; st.firstWinner = null; st.unseededTick = 0; st.order = [0, 1, 2];
+    function resetVisual() {
+      clearMarks();
+      const vbox = E('vbox', 0); vbox.setAttribute('opacity', 0); vbox.setAttribute('stroke', 'none'); vbox.setAttribute('fill', 'none');
       E('vline', 0).textContent = ''; E('vline', 1).textContent = '';
-      render();
+      for (let i = 0; i < PHASES.length; i++) { E('pillwin', i).textContent = '—'; E('pillwin', i).setAttribute('fill', c.muted); }
+    }
+    function resetState() {
+      st.winA = null; st.winB = null; st.phase = -1;
+      resetVisual(); setPhase(-1); render();
     }
     function reset() {
       if (st.busy) return;

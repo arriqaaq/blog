@@ -1,17 +1,19 @@
 /**
- * DST Pure-Function (re-skinned via dst-kit) — same input, same output (until a clock leaks in).
+ * DST Pure-Function (re-skinned via dst-kit) — "run the same call twice; do the answers agree?"
  *
- * Animates the post's opening `checkout_total(300, 2)` example as three stacked lanes, each
- * firing the SAME call repeatedly as dots flowing left→right into an output column:
- *   1. PURE      — `price * qty` → always 600 (green). Replays identically forever.
- *   2. IMPURE     — reads the wall clock (`if now % 20 == 0 { subtotal/2 }`) → ~1 call in 20
- *                  returns 300 (amber). WHICH calls hit is different every run; modelled with
- *                  Math.random() because this lane is *supposed* to be nondeterministic.
- *   3. SEEDED     — `now_nanos` passed in → deterministic given a seed via K.rng(seed). Same
- *                  seed ⇒ identical 300-sequence; replays exactly.
+ * The question is the whole widget: we call checkout_total(300, 2) ten times, do that TWICE
+ * (run A and run B), and ask whether run B matches run A. Each cell prints the returned value —
+ * 600 (normal) or 300 (a "discount" glitch). Three versions of the function, labelled in plain
+ * words (the pure/impure/seeded jargon is just a small tag):
+ *   1. "uses only its inputs"        (pure)   → every call 600; A = B trivially. Reproducible.
+ *   2. "secretly reads the clock"    (impure) → the glitch lands on different calls each run, so
+ *                                               A ≠ B (red columns). Modelled with Math.random()
+ *                                               because this version is *meant* to be irreproducible.
+ *   3. "takes the clock as an input" (seeded) → still glitches, but both runs draw the SAME
+ *                                               sequence from the seed, so A = B. Reproducible.
  *
- * Run fires all lanes; Replay re-runs (1 & 3 reproduce identically, 2 diverges). The seed input
- * binds lane 3. Exposes window.DSTPureFunction.init(containerId).
+ * Loud per-row verdict (✓ reproducible / ✗ can't reproduce) carries the lesson. Run re-rolls;
+ * the seed input drives version 3. Exposes window.DSTPureFunction.init(containerId).
  */
 (function () {
   'use strict';
@@ -20,47 +22,53 @@
   const { animate } = anime;
   const K = window.DSTKit;
 
-  const W = 780, Hh = 264, CALLS = 18, ODDS = 5; // 1-in-ODDS hit rate, lively for a short demo
-  const LANE = { x0: 40, w: W - 80, h: 62, gap: 12, y0: 22 };
-  const SRC = { x: 132, OUT: W - 132 };          // call column x, output column x
+  const W = 780, Hh = 300, CALLS = 10, P = 0.2;       // few calls, value printed in each cell
+  const LANE = { x0: 20, h: 74, gap: 9, y0: 40, w: W - 40 };
+  const CX0 = 212, CX1 = 612, PITCH = (CX1 - CX0) / CALLS, CW = PITCH - 6, CH = 22;
   const laneY = (i) => LANE.y0 + i * (LANE.h + LANE.gap);
+  const rowY = (i, ab) => laneY(i) + 16 + ab * 28;     // ab: 0 = run A, 1 = run B
+  const cellX = (col) => CX0 + col * PITCH;
 
-  // Lane definitions — the verbatim code each one illustrates.
+  // Plain-English label first; the textbook term is a secondary tag.
   const LANES = [
-    { key: 'pure', color: 'green', name: 'pure', code: 'price * qty', mode: 'always-600' },
-    { key: 'impure', color: 'amber', name: 'impure', code: 'if now % 20 == 0 { subtotal/2 }', mode: 'wall-clock' },
-    { key: 'seeded', color: 'purple', name: 'seeded', code: 'if now_nanos % 20 == 0 { … }', mode: 'seeded' },
+    { plain: 'uses only its inputs',      code: 'price * qty',                tag: 'pure',   zone: 'green',  mode: 'pure' },
+    { plain: 'secretly reads the clock',  code: 'if clock() % 5 == 0 { … }', tag: 'impure', zone: 'amber',  mode: 'wall' },
+    { plain: 'takes the clock as input',  code: 'if now_in % 5 == 0 { … }',  tag: 'seeded', zone: 'purple', mode: 'seed' },
   ];
 
   function init(containerId) {
     const root = document.getElementById(containerId); if (!root) return;
     const uid = containerId;
-    const st = { seed: 1337, running: false, run: 0, pure: 0, impure: 0, seeded: 0, prevSeeded: null };
+    const st = { seed: 1337, running: false, diff: [0, 0, 0] };
     let svg, content, anim, logBody, c;
-    const id = (k, i) => `${uid}-${k}-${i}`;
-    const E = (k, i) => svg.querySelector('#' + CSS.escape(id(k, i)));
+    const rid = (lane, ab, col) => `${uid}-r-${lane}-${ab}-${col}`;
+    const tid = (lane, ab, col) => `${uid}-t-${lane}-${ab}-${col}`;
+    const Rect = (l, a, col) => svg.querySelector('#' + CSS.escape(rid(l, a, col)));
+    const Txt = (l, a, col) => svg.querySelector('#' + CSS.escape(tid(l, a, col)));
+    const Eid = (k, i) => svg.querySelector('#' + CSS.escape(`${uid}-${k}-${i}`));
 
     build();
 
     function controls() {
       return `<div class="dstk-tgroup">
-        <button class="dstk-btn dstk-btn--green t-run">▶ Run</button>
-        <button class="dstk-btn dstk-btn--ghost t-replay">↺ Replay</button></div>
+        <button class="dstk-btn dstk-btn--green t-run">▶ Run twice (A &amp; B)</button>
+        <button class="dstk-btn dstk-btn--ghost t-replay">↺ Try again</button></div>
         <span class="dstk-sp"></span>
-        <div class="dstk-tgroup"><span class="dstk-tlabel">seed (lane 3)</span>
+        <div class="dstk-tgroup"><span class="dstk-tlabel">seed (row 3)</span>
           <input type="number" class="t-seed" value="${st.seed}" min="0"></div>`;
     }
 
     function build() {
       root.innerHTML = K.container({
-        title: 'Same input, same output', sub: 'checkout_total(300, 2) — fired 18× per lane',
+        title: 'Run the same call twice — do you get the same answer?', sub: 'checkout_total(300, 2)',
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
         stats: [
-          { id: 'pure', label: "pure 300's" },
-          { id: 'impure', label: "impure 300's" },
-          { id: 'seeded', label: "seeded 300's" },
+          { id: 'pure', label: 'top: A vs B' },
+          { id: 'impure', label: 'mid: A vs B' },
+          { id: 'seeded', label: 'low: A vs B' },
         ],
-        cap: "Same input, same output — until a hidden clock leaks in. Hand the clock in and it's pure again.",
+        cap: 'Each square is one call; the number is what it returned (600 normal, 300 a "discount" '
+           + 'glitch). If run A and run B disagree (red columns), the bug can never be reproduced.',
       });
       c = K.palette();
       svg = root.querySelector('.dstk-svg');
@@ -68,137 +76,142 @@
       anim = svg.querySelector('.anim');
       logBody = root.querySelector('.dstk-log-body');
       drawScene(); bind(); render();
-      K.addLog(logBody, '🌱 ready — three lanes, same call · press Run', 'hl');
+      K.addLog(logBody, '🌱 ready — press Run to call each version twice and compare', 'hl');
     }
 
     function drawScene() {
       content.innerHTML = '';
+      // header question + legend
+      K.el('text', { x: LANE.x0 + 4, y: 22, fill: c.text, 'font-size': 11.5, 'font-weight': 700 }, content)
+        .textContent = 'Call it 10× — then do it all again. Does run B match run A?';
+      legendSwatch(CX1 - 156, 22, c.green, '600 normal');
+      legendSwatch(CX1 - 56, 22, c.amber, '300 glitch');
+
       LANES.forEach((L, i) => {
-        const y = laneY(i), my = y + LANE.h / 2;
-        // lane frame
+        const y = laneY(i), accent = c[L.zone];
         K.el('rect', { x: LANE.x0, y, width: LANE.w, height: LANE.h, rx: 9,
-          fill: K.grad(uid, L.color), stroke: c[L.color], 'stroke-width': 1.6 }, content);
-        // lane label + the code it runs
-        K.el('text', { x: LANE.x0 + 12, y: y + 18, fill: c[L.color], 'font-size': 11.5, 'font-weight': 700 }, content)
-          .textContent = (i + 1) + '. ' + L.name;
-        K.el('text', { x: LANE.x0 + 12, y: y + 36, fill: c.muted, 'font-size': 10,
+          fill: K.grad(uid, L.zone), stroke: accent, 'stroke-width': 1.3 }, content);
+        // left: plain words first, then code, then the textbook tag
+        K.el('text', { x: LANE.x0 + 14, y: y + 20, fill: c.text, 'font-size': 12, 'font-weight': 700 }, content)
+          .textContent = L.plain;
+        K.el('text', { x: LANE.x0 + 14, y: y + 39, fill: c.muted, 'font-size': 9.5,
           'font-family': "ui-monospace,'SF Mono',monospace" }, content).textContent = L.code;
-        // flight rail
-        K.el('line', { x1: SRC.x, y1: my, x2: SRC.OUT, y2: my, stroke: c.separator,
-          'stroke-width': 1, 'stroke-dasharray': '4,5' }, content);
-        // call chip on the left
-        K.el('text', { x: SRC.x, y: my - 14, 'text-anchor': 'middle', fill: c.muted, 'font-size': 9 }, content)
-          .textContent = 'call';
-        K.el('circle', { cx: SRC.x, cy: my, r: 8, fill: K.grad(uid, L.color), stroke: c[L.color], 'stroke-width': 1.4 }, content);
-        // output column on the right
-        K.el('text', { x: SRC.OUT, y: my - 22, 'text-anchor': 'middle', fill: c.muted, 'font-size': 9 }, content)
-          .textContent = 'returns';
-        K.el('text', { id: id('out', i), x: SRC.OUT, y: my + 7, 'text-anchor': 'middle', fill: c[L.color],
-          'font-size': 22, 'font-weight': 700, 'font-variant-numeric': 'tabular-nums', filter: K.glow(uid) }, content)
-          .textContent = '—';
-        // per-lane note (right edge)
-        K.el('text', { id: id('note', i), x: SRC.OUT, y: my + 24, 'text-anchor': 'middle', fill: c.muted, 'font-size': 8.5 }, content)
-          .textContent = noteFor(L, null);
+        K.el('rect', { x: LANE.x0 + 14, y: y + 49, width: 13 + L.tag.length * 6, height: 15, rx: 7.5,
+          fill: accent, 'fill-opacity': 0.16, stroke: accent, 'stroke-opacity': 0.5 }, content);
+        K.el('text', { x: LANE.x0 + 20, y: y + 60, fill: accent, 'font-size': 9, 'font-weight': 700 }, content)
+          .textContent = L.tag;
+
+        // two run-rows of empty value cells
+        [0, 1].forEach((ab) => {
+          K.el('text', { x: CX0 - 9, y: rowY(i, ab) + CH / 2 + 4, 'text-anchor': 'end',
+            fill: c.muted, 'font-size': 9.5, 'font-weight': 700 }, content).textContent = ab === 0 ? 'A' : 'B';
+          for (let col = 0; col < CALLS; col++) {
+            K.el('rect', { id: rid(i, ab, col), x: cellX(col), y: rowY(i, ab), width: CW, height: CH, rx: 3,
+              fill: c.separator, 'fill-opacity': 0.4 }, content);
+            K.el('text', { id: tid(i, ab, col), x: cellX(col) + CW / 2, y: rowY(i, ab) + CH / 2 + 4,
+              'text-anchor': 'middle', fill: c.muted, 'font-size': 11, 'font-weight': 700,
+              'font-variant-numeric': 'tabular-nums' }, content).textContent = '';
+          }
+        });
+
+        // mismatch boxes + the loud verdict
+        K.el('g', { id: `${uid}-ticks-${i}` }, content);
+        K.el('text', { id: `${uid}-v1-${i}`, x: CX1 + 16, y: y + 32, fill: c.muted, 'font-size': 13, 'font-weight': 700 }, content).textContent = '—';
+        K.el('text', { id: `${uid}-v2-${i}`, x: CX1 + 16, y: y + 50, fill: c.muted, 'font-size': 9 }, content).textContent = 'press Run';
       });
     }
 
-    function noteFor(L, diverged) {
-      if (L.mode === 'always-600') return 'pure · invariant';
-      if (L.mode === 'seeded') return diverged === false ? 'seed → reproducible' : 'seed=' + st.seed;
-      return diverged ? 'wall clock · diverged' : 'wall clock · nondeterministic';
+    function legendSwatch(x, y, color, label) {
+      K.el('rect', { x, y: y - 9, width: 11, height: 11, rx: 2.5, fill: color, 'fill-opacity': 0.7, stroke: color }, content);
+      K.el('text', { x: x + 15, y, fill: c.muted, 'font-size': 9 }, content).textContent = label;
     }
 
     function stat(k, v) { const e = root.querySelector('#' + CSS.escape(uid + '-stat-' + k)); if (e) e.textContent = v; }
     function render() {
-      stat('pure', st.pure + ' / ' + CALLS);
-      stat('impure', st.impure + ' / ' + CALLS);
-      stat('seeded', st.seeded + ' / ' + CALLS);
+      const fmt = (d) => d === 0 ? 'match' : d + ' off';
+      stat('pure', fmt(st.diff[0])); stat('impure', fmt(st.diff[1])); stat('seeded', fmt(st.diff[2]));
     }
 
-    // Decide, per call index, whether each lane returns the discounted 300.
-    //  • pure   — never (always 600).
-    //  • impure — Math.random(): genuinely nondeterministic, differs every run (correct here).
-    //  • seeded — K.rng(seed): deterministic, same seed ⇒ same sequence.
+    // pure → never glitches; impure → Math.random (nondeterministic, correct here);
+    // seeded → two FRESH K.rng(seed) streams, so run A and run B draw the identical sequence.
     function plan() {
-      const r = K.rng(st.seed >>> 0);
-      const impure = [], seeded = [];
-      for (let i = 0; i < CALLS; i++) {
-        impure.push(Math.random() < 1 / ODDS);
-        seeded.push(r() < 1 / ODDS);
-      }
-      return { impure, seeded };
+      const draw = (gen) => Array.from({ length: CALLS }, () => gen() < P);
+      const s1 = K.rng(st.seed >>> 0), s2 = K.rng(st.seed >>> 0);
+      return [
+        [Array(CALLS).fill(false), Array(CALLS).fill(false)],
+        [draw(Math.random), draw(Math.random)],
+        [draw(s1), draw(s2)],
+      ];
+    }
+
+    function paint(lane, ab, col, v) {
+      const col2 = v ? c.amber : c.green, r = Rect(lane, ab, col), t = Txt(lane, ab, col);
+      r.setAttribute('fill', col2); r.setAttribute('fill-opacity', 0.16);
+      r.setAttribute('stroke', col2); r.setAttribute('stroke-opacity', 0.9);
+      t.setAttribute('fill', col2); t.textContent = v ? '300' : '600';
+      animate(r, { opacity: [0.2, 1], duration: 150, ease: 'out(2)' });
     }
 
     async function runAll(replay) {
       if (st.running) return;
       st.running = true; setLock(true);
-      st.run++;
-      st.pure = 0; st.impure = 0; st.seeded = 0;
-      LANES.forEach((L, i) => { E('out', i).textContent = '—'; E('out', i).setAttribute('fill', c[L.color]); });
-      render();
 
-      const p = plan();
-      const hit = [() => false, (i) => p.impure[i], (i) => p.seeded[i]]; // per-lane predicate
-      const seq = []; // seeded result sequence, to compare against the previous run
+      LANES.forEach((L, i) => {
+        svg.querySelector('#' + CSS.escape(`${uid}-ticks-${i}`)).innerHTML = '';
+        [0, 1].forEach((ab) => { for (let col = 0; col < CALLS; col++) {
+          const r = Rect(i, ab, col); r.setAttribute('fill', c.separator); r.setAttribute('fill-opacity', 0.4);
+          r.removeAttribute('stroke'); Txt(i, ab, col).textContent = '';
+        } });
+        Eid('v1', i).textContent = '…'; Eid('v2', i).textContent = '';
+      });
 
-      for (let i = 0; i < CALLS; i++) {
-        await Promise.all(LANES.map((L, lane) => {
-          const discount = hit[lane](i);
-          const val = discount ? 300 : 600;
-          if (lane === 2) seq.push(val);
-          return fly(lane, L, val, discount);
-        }));
-        await K.delay(70);
+      const data = plan();
+      // sweep call-by-call across both runs and all three versions
+      for (let col = 0; col < CALLS; col++) {
+        LANES.forEach((L, i) => [0, 1].forEach((ab) => paint(i, ab, col, data[i][ab][col])));
+        await K.delay(34);
       }
 
-      // compare seeded run to the previous one — proves determinism vs the seed
-      let seededDiverged = false;
-      if (st.prevSeeded) seededDiverged = st.prevSeeded.join(',') !== seq.join(',');
-      st.prevSeeded = seq;
-
-      LANES.forEach((L, i) => E('note', i).textContent =
-        noteFor(L, i === 2 ? seededDiverged : (i === 1 ? true : null)));
+      LANES.forEach((L, i) => {
+        const A = data[i][0], B = data[i][1];
+        let diff = 0;
+        for (let col = 0; col < CALLS; col++) if (A[col] !== B[col]) { diff++; drawTick(i, col); }
+        st.diff[i] = diff;
+        const same = diff === 0;
+        const v1 = Eid('v1', i), v2 = Eid('v2', i);
+        v1.textContent = same ? '✓ A = B' : '✗ A ≠ B';
+        v1.setAttribute('fill', same ? c.green : c.red);
+        v2.setAttribute('fill', same ? c.green : c.red);
+        v2.textContent = L.mode === 'pure' ? 'always reproducible'
+          : L.mode === 'seed' ? (same ? 'reproducible (seeded)' : 'seed mismatch?!')
+          : 'can never reproduce';
+      });
       render();
 
-      const tag = 'run ' + st.run + ': ';
-      if (replay) {
-        K.addLog(logBody, '↺ replay — pure+seeded identical, impure diverged', 'hl');
-      }
-      K.addLog(logBody, tag + 'pure ' + st.pure + " 300's (always 0 — invariant)", st.pure === 0 ? 'ok' : 'err');
-      K.addLog(logBody, tag + 'impure ' + st.impure + " 300's @ wall-clock — unreproducible", 'warn');
-      K.addLog(logBody, tag + 'seeded ' + st.seeded + " 300's @ seed=" + st.seed
-        + (seededDiverged ? ' — DIVERGED?!' : ' — reproducible'), seededDiverged ? 'err' : 'ok');
+      K.addLog(logBody, (replay ? '↺ tried again' : '▶ ran') + ' — compared run A vs run B', 'hl');
+      K.addLog(logBody, 'inputs only: A = B — same answer, always', st.diff[0] ? 'err' : 'ok');
+      K.addLog(logBody, 'reads clock: ' + (st.diff[1] ? st.diff[1] + ' calls differ — unreproducible' : 'matched by luck this time'), 'warn');
+      K.addLog(logBody, 'clock seeded in: A = B @ seed=' + st.seed + ' — reproducible', st.diff[2] ? 'err' : 'ok');
 
       st.running = false; setLock(false);
     }
 
-    // One call: a dot flies the rail; on arrival the output snaps to 600 or 300.
-    async function fly(lane, L, val, discount) {
-      const y = laneY(lane) + LANE.h / 2;
-      const dot = K.el('circle', { cx: SRC.x, cy: y, r: 6,
-        fill: discount ? c.amber : c[L.color], filter: K.glow(uid) }, anim);
-      await animate(dot, { cx: SRC.OUT, duration: 460, ease: 'inOutQuad' });
-      dot.remove();
-      // tally + paint the output
-      if (discount) { if (L.key === 'pure') st.pure++; else if (L.key === 'impure') st.impure++; else st.seeded++; }
-      const out = E('out', lane);
-      out.textContent = String(val);
-      out.setAttribute('fill', discount ? c.amber : c[L.color]);
-      flash(out, discount ? c.amber : c[L.color]);
-      render();
-    }
-    function flash(el, col) {
-      const old = el.getAttribute('fill');
-      animate(el, { opacity: [1, 0.4, 1], duration: 220, ease: 'inOut(2)', onComplete: () => el.setAttribute('fill', old || col) });
+    // red box around a column where run A and run B disagree — "this can't be replayed"
+    function drawTick(lane, col) {
+      const g = svg.querySelector('#' + CSS.escape(`${uid}-ticks-${lane}`));
+      const yTop = rowY(lane, 0) - 3, yBot = rowY(lane, 1) + CH + 3;
+      const box = K.el('rect', { x: cellX(col) - 2, y: yTop, width: CW + 4, height: yBot - yTop, rx: 3,
+        fill: 'none', stroke: c.red, 'stroke-width': 2, opacity: 0 }, g);
+      animate(box, { opacity: [0, 1], duration: 280, ease: 'out(2)' });
     }
 
     function bind() {
       root.querySelector('.t-run').onclick = () => runAll(false);
-      root.querySelector('.t-replay').onclick = () => { if (st.run === 0) return runAll(false); runAll(true); };
+      root.querySelector('.t-replay').onclick = () => runAll(true);
       root.querySelector('.t-seed').onchange = (e) => {
-        st.seed = parseInt(e.target.value, 10) || 0; st.prevSeeded = null;
-        E('note', 2).textContent = 'seed=' + st.seed;
-        K.addLog(logBody, '🌱 seed → ' + st.seed + ' · lane 3 will reproduce this', 'hl');
+        st.seed = parseInt(e.target.value, 10) || 0;
+        K.addLog(logBody, '🌱 seed → ' + st.seed + ' · the seeded version reproduces this', 'hl');
+        if (!st.running) runAll(true);
       };
     }
 

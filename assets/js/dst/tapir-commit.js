@@ -2,19 +2,24 @@
  * DST TAPIR Commit (re-skinned via dst-kit) — optimistic concurrency over Inconsistent Replication.
  *
  * TAPIR has NO leader on the normal commit path: the CLIENT is the transaction coordinator. On
- * "Commit" the client fans a Prepare to ALL replicas (n=5, so f=2); each replies Ok or abstains,
- * and the coordinator times the two-phase quorum:
+ * "Commit" the client fans a Prepare to ALL replicas (n=5, so f=2); each replies Ok (or its reply
+ * is lost/slow this round), and the coordinator times the two-phase quorum:
  *   • FAST path (1 round trip): a fast/super-quorum ⌈3f/2⌉+1 = 4 agreeing replies lets the client
- *     commit immediately — "decide in one round in the common case" (configuration.rs:54). The
+ *     commit immediately — "decide in one round in the common case" (configuration.rs:55). The
  *     fast path returns the moment that quorum lands (client.rs:102-146); Prepare Ok ⇒ commit
  *     (transaction.rs:623-631).
- *   • SLOW path (2 round trips): if the fast quorum is missed but a simple majority (slow quorum
- *     f+1 = 3) replies, the client runs a second round, then commits.
- *   • STALL: if even the slow quorum is unreachable, no commit — wait for quorum.
- * "drop k replies" + a seed pick WHICH replicas are slow/disagree via K.rng(seed) (deterministic).
- * View changes use a deterministic merge leader view % N (configuration.rs:108-110) — only off the
- * normal path. Committed timestamps never regress: highest_committed_ts is a high-water mark
- * (store/mod.rs:122-125).
+ *   • SLOW path: if the fast quorum is missed but a simple majority (slow quorum f+1 = 3) of replies
+ *     is already in hand, the coordinator decides from those with NO extra round trip
+ *     (client.rs:282-293); only if too few replies arrived does it re-send (a 2nd round trip).
+ *   • STALL: if even the slow quorum is unreachable (more than f replicas down), no commit — wait.
+ * "drop k replies" + a seed pick WHICH replies are lost this round via K.rng(seed) (deterministic).
+ * A 2nd round trip can only rescue *transient* losses, so of the k lost replies the first
+ * max(0,k-f) are modelled as genuinely DOWN (silent on the retry too) and the rest as transiently
+ * slow (answer on the retry) — so the retry forms the f+1 quorum iff at most f replicas are down,
+ * otherwise it stalls. (Abstain — a definitive "uncertain" reply that counts against the Ok tally,
+ * protocol.rs:407 — is not modelled here; lost replies simply don't arrive.) View changes use a deterministic merge
+ * leader view % N (configuration.rs:108-110) — only off the normal path. Committed timestamps never
+ * regress: highest_committed is a high-water mark (store/memory.rs:165-166).
  *
  * Exposes window.DSTTapirCommit.init(containerId).
  */
@@ -60,17 +65,18 @@
     function build() {
       root.innerHTML = K.container({
         title: 'TAPIR commit — no leader on the normal path',
-        sub: `client is the coordinator · n=${N}, f=${F} · fast quorum ⌈3f/2⌉+1=${FAST_Q}, slow quorum f+1=${SLOW_Q}`,
+        sub: `client asks all ${N} replicas · ${FAST_Q} agree → commit in 1 trip · ${SLOW_Q} → maybe a 2nd · fewer → stuck`,
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
         stats: [
           { id: 'reps', label: 'replicas' },
           { id: 'quorum', label: 'quorum reached' },
           { id: 'rt', label: 'round-trips' },
         ],
-        cap: 'Supermajority ⇒ commit in one round trip; a simple majority falls back to a second; ' +
-          'no leader on the normal path. <span style="opacity:.8">View changes pick a deterministic ' +
-          'merge leader <code>view % N</code> — only off this path. Committed timestamps never regress: ' +
-          '<code>highest_committed_ts</code> is a high-water mark.</span>',
+        cap: 'Supermajority ⇒ commit in one round trip; a simple majority commits from the replies ' +
+          'already in hand (a 2nd round trip only if too few arrived); no leader on the normal path. ' +
+          '<span style="opacity:.8">View changes pick a deterministic merge leader <code>view % N</code> ' +
+          '— only off this path. Committed timestamps never regress: <code>highest_committed</code> is a ' +
+          'high-water mark.</span>',
       });
       c = K.palette();
       svg = root.querySelector('.dstk-svg');
@@ -122,7 +128,7 @@
       K.el('text', { x: CLIENT.x, y: Hh - 34, fill: c.muted, 'font-size': 9.5 }, content)
         .textContent = 'slow quorum = f+1';
       K.el('text', { x: CLIENT.x, y: Hh - 20, fill: c.purple, 'font-size': 12, 'font-weight': 700 }, content)
-        .textContent = `= ${SLOW_Q}  →  2nd round trip`;
+        .textContent = `= ${SLOW_Q}  →  slow-path commit`;
     }
 
     function stat(k, v) { const e = root.querySelector('#' + CSS.escape(uid + '-stat-' + k)); if (e) e.textContent = v; }
@@ -136,6 +142,15 @@
       const p = E('phase', 0);
       if (p) { p.textContent = txt; p.setAttribute('fill', col || c.text); }
     }
+    // loud outcome banner across the top — the takeaway of a Commit
+    function verdict(txt, zone) {
+      const old = svg.querySelector('#' + CSS.escape(uid + '-verdict')); if (old) old.remove();
+      const col = c[zone], cxm = (clientCx + REP.x) / 2, bw = 320, bx = cxm - bw / 2, by = 6;
+      const g = K.el('g', { id: uid + '-verdict', opacity: 0 }, content);
+      K.el('rect', { x: bx, y: by, width: bw, height: 30, rx: 8, fill: K.grad(uid, zone), stroke: col, 'stroke-width': 1.8, filter: K.glow(uid) }, g);
+      K.el('text', { x: cxm, y: by + 20, 'text-anchor': 'middle', fill: col, 'font-size': 13, 'font-weight': 700 }, g).textContent = txt;
+      animate(g, { opacity: [0, 1], duration: 260, ease: 'out(2)' });
+    }
     function resetRows() {
       for (let i = 0; i < N; i++) {
         const rl = E('rlbl', i); if (rl) { rl.textContent = '—'; rl.setAttribute('fill', c.muted); }
@@ -144,14 +159,21 @@
       }
     }
 
-    // Deterministically choose WHICH replicas are slow/disagree from the seed: shuffle ids, take k.
-    function chooseSlow(k) {
+    // Deterministically choose WHICH replies are lost this round from the seed: shuffle ids, take k.
+    // A 2nd round trip can only rescue *transient* losses; a replica that is genuinely DOWN stays
+    // silent on the retry too. The cluster tolerates f down replicas, so model the first
+    // max(0, k - f) of the lost replies as down (never answer) and the rest as transiently slow
+    // (answer on the retry). This keeps every outcome reachable: ≤f lost → retry forms the quorum
+    // (2 trips); >f down → even the retry can't reach f+1 → stall.
+    function chooseLost(k) {
       const ids = Array.from({ length: N }, (_, i) => i);
       for (let i = ids.length - 1; i > 0; i--) {
         const j = Math.floor(st.rng() * (i + 1));
         const t = ids[i]; ids[i] = ids[j]; ids[j] = t;
       }
-      return new Set(ids.slice(0, k));
+      const lost = ids.slice(0, k);
+      const nDown = Math.max(0, k - F);          // losses beyond the f the cluster tolerates are "down"
+      return { lost: new Set(lost), down: new Set(lost.slice(0, nDown)) };
     }
 
     // Fly a particle along a path; resolves when it lands.
@@ -186,7 +208,7 @@
           flash(E('rep', i), c.green);
           ins.push(fly(repCx, repY(i) + REP.h / 2, clientCx, clientCy, c.green, 360));
         } else {
-          if (rl) { rl.textContent = 'abstain'; rl.setAttribute('fill', c.red); }
+          if (rl) { rl.textContent = 'no reply'; rl.setAttribute('fill', c.red); }
           E('dot', i).setAttribute('fill', c.red);
           flash(E('rep', i), c.red);
         }
@@ -200,44 +222,63 @@
       st.roundTrips = 0; st.reached = '—';
       st.rng = K.rng(st.seed >>> 0);
       resetRows(); render();
+      const ov = svg.querySelector('#' + CSS.escape(uid + '-verdict')); if (ov) ov.remove();
 
       const drop = Math.max(0, Math.min(N, st.drop));
-      const slow = chooseSlow(drop);
-      const answering = N - drop;
-      K.addLog(logBody, `Prepare fan-out → all ${N} replicas (seed ${st.seed}; slow: ${[...slow].map((i) => 'r' + i).join(',') || 'none'})`, 'hl');
+      const { lost, down } = chooseLost(drop);
+      const downNote = down.size ? `; down (>f, never answer): ${[...down].map((i) => 'r' + i).join(',')}` : '';
+      K.addLog(logBody, `Prepare fan-out → all ${N} replicas (seed ${st.seed}; lost: ${[...lost].map((i) => 'r' + i).join(',') || 'none'}${downNote})`, 'hl');
 
       // ---- Round 1: Prepare to all replicas ----
-      const ok1 = await prepareRound(Array.from({ length: N }, (_, i) => i), slow, 'round 1: Prepare');
+      const ok1 = await prepareRound(Array.from({ length: N }, (_, i) => i), lost, 'round 1: Prepare');
       K.addLog(logBody, `round 1: ${ok1.length}/${N} replied Ok`, ok1.length >= SLOW_Q ? 'ok' : 'warn');
 
       // FAST path: fast quorum on the first round trip ⇒ commit immediately.
       if (ok1.length >= FAST_Q) {
         st.reached = `fast (${ok1.length}≥${FAST_Q})`;
         setPhase('COMMIT (fast)', c.green);
+        verdict('✓ COMMIT · 1 round trip', 'green');
         K.addLog(logBody, `fast quorum ${ok1.length} ≥ ${FAST_Q} → commit in 1 round trip · ts is a high-water mark`, 'ok');
         render(); await K.delay(280);
         return finish();
       }
 
-      // SLOW path: missed fast quorum but a simple majority answered ⇒ second round, then commit.
-      if (answering >= SLOW_Q) {
-        K.addLog(logBody, `fast quorum missed (${ok1.length} < ${FAST_Q}) — fall back to slow path`, 'warn');
-        await K.delay(220);
-        // re-send to the stragglers; in this round they answer (the second round trip).
-        const stragglers = Array.from({ length: N }, (_, i) => i).filter((i) => slow.has(i));
-        const ok2 = await prepareRound(stragglers, new Set(), 'round 2: Prepare (slow)');
-        const total = ok1.length + ok2.length;
-        st.reached = `slow (${SLOW_Q})`;
+      // SLOW path, replies already in hand: fast quorum missed, but the slow quorum is satisfied by
+      // the round-1 replies ⇒ decide from those, NO second round trip (client.rs:282-293).
+      if (ok1.length >= SLOW_Q) {
+        st.reached = `slow (${ok1.length}≥${SLOW_Q})`;
         setPhase('COMMIT (slow)', c.purple);
-        K.addLog(logBody, `slow quorum f+1=${SLOW_Q} met after 2nd round (${total}/${N}) → commit`, 'ok');
+        verdict('✓ COMMIT · slow quorum, 1 trip', 'purple');
+        K.addLog(logBody, `fast quorum missed (${ok1.length} < ${FAST_Q}); slow quorum f+1=${SLOW_Q} already in hand → commit, still 1 round trip`, 'ok');
         render(); await K.delay(280);
         return finish();
       }
 
-      // STALL: not even the slow quorum is reachable.
+      // SLOW path, too few replies: re-send to the ones whose reply was lost (a 2nd round trip);
+      // commit only if the retry collects the slow quorum (client.rs:286-293, send_until_quorum).
+      // Transiently-slow replicas answer the retry; genuinely-down ones (`down`) stay silent, so
+      // the retry forms a quorum only when at most f replicas are actually down.
+      const stragglers = Array.from({ length: N }, (_, i) => i).filter((i) => lost.has(i));
+      if (stragglers.length) {
+        K.addLog(logBody, `fast & slow quorum missed in round 1 (${ok1.length} < ${SLOW_Q}) — re-send to non-responders (2nd round trip)`, 'warn');
+        await K.delay(220);
+        const ok2 = await prepareRound(stragglers, down, 'round 2: Prepare (retry)');
+        const total = ok1.length + ok2.length;
+        if (total >= SLOW_Q) {
+          st.reached = `slow (${total}≥${SLOW_Q})`;
+          setPhase('COMMIT (slow)', c.purple);
+          verdict('✓ COMMIT · slow quorum, 2 trips', 'purple');
+          K.addLog(logBody, `slow quorum f+1=${SLOW_Q} met after 2nd round (${total}/${N}) → commit`, 'ok');
+          render(); await K.delay(280);
+          return finish();
+        }
+      }
+
+      // STALL: not even the slow quorum is reachable — more than f replicas are down.
       st.reached = 'none — stalled';
       setPhase('stalled', c.red);
-      K.addLog(logBody, `only ${answering} reachable < slow quorum ${SLOW_Q} — stalled, waiting for quorum`, 'err');
+      verdict('✗ STALLED · no quorum', 'red');
+      K.addLog(logBody, `>${F} replicas down → slow quorum f+1=${SLOW_Q} unreachable even after retry — stalled, waiting for quorum`, 'err');
       render();
       finish();
     }

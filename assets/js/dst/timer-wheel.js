@@ -2,10 +2,11 @@
  * DST Tokio Hashed Timing Wheel (re-skinned via dst-kit) — coarse timers cascade, a paused clock leaps.
  *
  * Tokio's timer driver is a hierarchical hashed timing wheel: NUM_LEVELS=6 levels of LEVEL_MULT=64
- * slots each, the finest at 1 ms per slot (runtime/time/wheel/mod.rs:42; wheel/level.rs:38;
- * runtime/time/mod.rs:70-76) → it spans ~12 days. We can't draw 64 slots, so this is a REPRESENTATIVE
- * wheel of 3 levels drawn as horizontal rows, each LABELED with its real granularity:
- *   Level 0 = 1 ms/slot · Level 1 = 64 ms/slot · Level 2 ≈ 4.1 s/slot  (…6 levels total, to ~12 days)
+ * slots each, the finest at 1 ms per slot (runtime/time/wheel/mod.rs:42-48; wheel/level.rs:38;
+ * runtime/time/mod.rs:70-76) → it spans ~2 years (MAX_DURATION = (1<<36)-1 ms; the coarsest slot
+ * alone is ~12 days). We can't draw 64 slots, so this is a REPRESENTATIVE wheel of 3 levels drawn as
+ * horizontal rows, each LABELED with its real granularity:
+ *   Level 0 = 1 ms/slot · Level 1 = 64 ms/slot · Level 2 ≈ 4.1 s/slot  (…6 levels total, to ~2 years)
  *
  * sleep(d) computes a deadline = Instant::now() + d and registers on first poll
  * (time/sleep.rs:123-129; time/entry.rs:608-610). The deadline picks a level by how far away it is.
@@ -37,7 +38,7 @@
   const rowY = (lvl) => ROW.y0 + lvl * (ROW.h + ROW.gap);
   const slotX = (s) => ROW.x0 + s * slotW;
 
-  const SNIPPET = `// tokio: 6 levels × 64 slots, level 0 = 1 ms/slot  → spans ~12 days
+  const SNIPPET = `// tokio: 6 levels × 64 slots, level 0 = 1 ms/slot  → spans ~2 years
 let deadline = Instant::now() + duration;   // sleep(d): time/sleep.rs:123
 // paused + no runnable work: leap to the next timer, then fire it
 //   self.park.park_timeout(0); clock.advance(next - now)  // mod.rs:263-275`;
@@ -69,7 +70,7 @@ let deadline = Instant::now() + duration;   // sleep(d): time/sleep.rs:123
 
     function build() {
       root.innerHTML = K.container({
-        title: 'Tokio hashed timing wheel', sub: 'coarse timers cascade down; a paused clock leaps idle gaps',
+        title: 'Tokio timing wheel — a sleep is filed by how far off it is', sub: 'and a paused clock skips the empty gaps for free',
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
         stats: [{ id: 'now', label: 'now' }, { id: 'pending', label: 'pending' }, { id: 'fired', label: 'fired' }],
         cap: 'Six levels, 64 slots each; coarse timers cascade down, and a paused clock leaps over idle gaps.',
@@ -86,6 +87,8 @@ let deadline = Instant::now() + duration;   // sleep(d): time/sleep.rs:123
     function drawScene() {
       content.innerHTML = '';
       anim.innerHTML = '';
+      K.el('text', { x: ROW.x0, y: 26, fill: c.muted, 'font-size': 10 }, content)
+        .textContent = 'each ● = a pending sleep, filed into a slot by its deadline · the amber cursor sweeps Level 0 (1 ms/step)';
       LEVELS.forEach((L, lvl) => {
         const y = rowY(lvl);
         // level label + granularity
@@ -104,7 +107,7 @@ let deadline = Instant::now() + duration;   // sleep(d): time/sleep.rs:123
         fill: c.amber, 'font-size': 9.5, 'font-weight': 600 }, content).textContent = 'cursor';
       // footnote: the full wheel
       K.el('text', { x: ROW.x0, y: rowY(2) + ROW.h + 22, fill: c.muted, 'font-size': 10 }, content)
-        .textContent = '…6 levels total, 64 slots each → spans ~12 days. Each level is 64× coarser than the one below.';
+        .textContent = '…6 levels total, 64 slots each → spans ~2 years (the coarsest slot alone is ~12 days). Each level is 64× coarser than the one below.';
     }
 
     // --- placement: deadline → (level, slot) for the representative wheel ---
@@ -203,6 +206,18 @@ let deadline = Instant::now() + duration;   // sleep(d): time/sleep.rs:123
       return true;
     }
 
+    // loud transient banner over the wheel — "we skipped this much time for free"
+    function leapBanner(msg) {
+      const old = content.querySelector('#' + CSS.escape(uid + '-leap')); if (old) old.remove();
+      const by = (rowY(0) + rowY(2)) / 2 + 2, bw = 340, bh = 32, bx = (W - bw) / 2;
+      const g = K.el('g', { id: uid + '-leap', opacity: 0 }, content);
+      K.el('rect', { x: bx, y: by, width: bw, height: bh, rx: 8, fill: K.grad(uid, 'amber'),
+        stroke: c.amber, 'stroke-width': 1.8, filter: K.glow(uid) }, g);
+      K.el('text', { x: W / 2, y: by + 21, 'text-anchor': 'middle', fill: c.amber, 'font-size': 13, 'font-weight': 700 }, g).textContent = msg;
+      animate(g, { opacity: [0, 1], duration: dur(200), ease: 'out(2)' });
+      animate(g, { opacity: [1, 0], delay: dur(1200), duration: dur(650), ease: 'in(2)', onComplete: () => g.remove() });
+    }
+
     // sweep the Level-0 cursor by one slot; cascade coarse timers; fire expired ones
     async function advance() {
       if (st.busy) return;
@@ -240,6 +255,7 @@ let deadline = Instant::now() + duration;   // sleep(d): time/sleep.rs:123
       const gap = next - st.now;
       K.addLog(logBody, `⏩ no runnable work → leap now ${fmtMs(st.now)}→${fmtMs(next)} (idle gap ${fmtMs(gap)} skipped in 0 real time)`, 'warn');
       st.now = next;
+      leapBanner('⏩ skipped ' + fmtMs(gap) + ' in 0 ms of real time');
       // cascade any coarse timer that is now due into Level 0 before it fires
       for (const t of pending.filter((t) => t.level > 0 && t.deadline <= next)) {
         t.level = 0; t.slot = 0;

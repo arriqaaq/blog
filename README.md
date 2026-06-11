@@ -2,7 +2,8 @@
 
 A static blog of build logs and notes on distributed systems — written in **Markdown**, built by a
 small zero-framework Node script, with interactive animated widgets and SVG diagrams. The flagship post
-is *The Seed Contract*, a deterministic-simulation-testing (DST) build log.
+is *Learning DST for testing our distributed transactional KV store*, a deterministic-simulation-testing
+(DST) build log.
 
 ## Quick start
 
