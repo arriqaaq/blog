@@ -6,7 +6,7 @@ The flagship post is a deterministic-simulation-testing (DST) build log with int
 ## Build & run
 
 ```bash
-npm install            # once — installs `marked`, `marked-highlight`, `highlight.js`
+npm install            # once — installs `marked` + `highlight.js` (build-time code highlighting)
 npm run build          # = node build/build.js   → regenerates posts/, widgets/, index.html
 python3 -m http.server 8000 --bind 127.0.0.1   # then open http://127.0.0.1:8000/
 ```

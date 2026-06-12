@@ -1,0 +1,26 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+
+*.log
+plan.md
+.DS_Store
+.claude/
+
+plugin/scripts/*.map
+plugin/scripts/*.d.mts
+data/
+.fastembed_cache/
+
+
+# Added by cargo
+
+/target
+.mcp.json
+.svelte-kit/
+build/
+node_modules/

@@ -7,7 +7,7 @@ gallery) and the `widgets/*.html` demo pages.
 ## Build
 
 ```bash
-npm install        # once, installs `marked`
+npm install        # once, installs `marked` + `highlight.js`
 npm run build      # or: node build/build.js
 ```
 
@@ -38,6 +38,10 @@ Rust (or any language) goes in a fenced block:
 ```rust
 fn build_runtime() -> Result<Runtime, Error> { … }
 ```
+
+The fence's language tag (`` ```rust ``, `` ```bash ``, …) is syntax-highlighted at build time by
+`highlight.js` — no client-side JS, and it adapts to light/dark. Use a real language name so it's
+recognised; an unknown or omitted tag just renders as plain (uncoloured) monospace.
 
 ### A subsection {#some-anchor}
 
