@@ -23,7 +23,7 @@
 
   const W = 780, Hh = 300, TICK = 10, NODES = 3;
   // node dots down the left edge — the delivery targets
-  const NODE = { x: 60, r: 17, ys: [70, 150, 230] };
+  const NODE = { x: 60, r: 17, ys: [104, 176, 248] };
   // the queue (min-heap), small + followable, in the middle/right
   const HEAP = { x: 308, y: 86, w: 300, rowH: 34, max: 5 };
   // phase pills along the top

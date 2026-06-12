@@ -7,7 +7,7 @@ date: 2026-06-09
 byline: A build log on dst — a from-scratch DST runtime, standing on Tokio, Turmoil, madsim, and FoundationDB.
 ---
 
-We've been building our distributed transactional key-value store over the past year. Two aspects that have always intrigued me are correctness and reproducibility. Having read multiple Jepsen reports, I've seen how difficult it can be to reproduce novel bugs once they're discovered.
+We've been building our distributed transactional key-value store over the past year at [SurrealDB](https://surrealdb.com/). Two aspects that have always intrigued me are correctness and reproducibility. Having read multiple Jepsen reports, I've seen how difficult it can be to reproduce novel bugs once they're discovered.
 
 Deterministic Simulation Testing (DST) is an interesting approach to addressing the reproducibility problem. IMO, this is how I see it fit in
 
@@ -156,15 +156,21 @@ Concurrency now is simulated ordering. And the entire system becomes a pure func
 
 [[WIDGET:sim-cluster]]
 
-## Building upon Tokio {#tokio-tick}
+## Building upon Tokio: making async time controllable {#tokio-tick}
 
-The previous sections reduced deterministic simulation to a heartbeat: deliver due messages, choose which tasks run, advance virtual time, and record what happened. That loop is easy to draw. The harder part is making ordinary async Rust code obey it without asking every application to rewrite its timers, retries, heartbeats, and timeouts from scratch.
+The previous sections reduced deterministic simulation to a heartbeat: deliver due messages, choose which work runs, advance virtual time, and record what happened. That loop is easy to describe if the system is written directly against the simulator. Real async Rust systems are not. They already use `tokio::time::sleep`, `timeout`, `interval`, heartbeat tasks, retry loops, and cancellation.
 
-This is where we lean on Tokio instead of replacing it. Madsim rebuilds the runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.
+So this section focuses on one narrower question:
 
-### The runtime each node gets {#the-node-runtime}
+> Can ordinary Tokio code run against time that the simulator controls?
 
-Every simulated host or client gets its own `NodeRuntime`. That runtime is current-thread, time-enabled, and started with Tokio time paused:
+Tokio gives us the building block for that. Instead of replacing the async programming model, we create runtimes whose clocks are paused. Application code still awaits Tokio timers. The difference is that those timers no longer follow the host wall clock.
+
+Madsim rebuilds more of the runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves. The approach here is closer to the Turmoil side of that split.
+
+### The runtime shape we need {#the-node-runtime}
+
+Each simulated host or client eventually runs inside a Tokio runtime with three important properties: it is current-thread, time-enabled, and started with Tokio time paused.
 
 ```rust
 fn build_runtime(sim_seed: u64, node_name: &str) -> Result<Runtime, Error> {
@@ -191,10 +197,10 @@ fn build_runtime(sim_seed: u64, node_name: &str) -> Result<Runtime, Error> {
 }
 ```
 
-- `new_current_thread` gives the node one executor thread, so Tokio is not racing work across a pool of OS-scheduled workers. 
-- `enable_time` installs Tokio's timer driver. 
-- `start_paused(true)` freezes Tokio's own clock: `tokio::time::Instant::now()` no longer advances just because real wall-clock time advanced
-- `rng_seed` derives a node-specific seed from the simulation seed and the node name, then passes it into Tokio so runtime-internal randomness, especially default `tokio::select!` branch ordering, can be replayed.
+- `new_current_thread` gives the runtime one executor thread. That matters because a multi-threaded runtime reintroduces OS worker scheduling: two ready tasks may run in different orders depending on which worker wakes first.
+- `enable_time` installs Tokio's timer driver.
+- `start_paused(true)` freezes Tokio's own clock. Calls to `tokio::time::Instant::now()` and timers such as `sleep`, `timeout`, and `interval` now depend on Tokio's paused clock rather than elapsed wall-clock time.
+- `rng_seed` derives a node-specific seed from the simulation seed and the node name, then passes it into Tokio so runtime-internal randomness can be replayed.
 
 [[WIDGET:tokio-runtime]]
 
@@ -208,33 +214,23 @@ So a node calling `tokio::time::Instant::now()` is not reading the machine's liv
 
 [[WIDGET:paused-clock]]
 
-### Advancing a node with a sleep fence {#how-a-node-tick-advances-time}
+### Advancing time with a sleep fence {#how-a-node-tick-advances-time}
 
-Once Tokio time is paused, we can advance a node by awaiting a timer inside that node's runtime. The core of `NodeRuntime::tick` is small:
+Once Tokio time is paused, the simulator can move a runtime forward by awaiting a timer inside that runtime:
 
 ```rust
-pub fn tick(&mut self, duration: Duration) -> Result<bool, Error> {
-    if self.crashed || self.finished {
-        return Ok(self.finished);
-    }
-
-    self.tokio.block_on(async {
-        self.local
-            .run_until(async {
-                tokio::time::sleep(duration).await;
-            })
-            .await;
-    });
-
-    // ... then check whether the node task has finished
-}
+local
+    .run_until(async {
+        tokio::time::sleep(tick).await;
+    })
+    .await;
 ```
 
-The `sleep(duration)` is a fence. `LocalSet::run_until` keeps the node's local tasks moving until that fence future completes. Application timers inside the node and the fence timer all register deadlines in the same Tokio time driver.
+The `sleep(tick)` is a fence. `LocalSet::run_until` keeps polling the node's local tasks until that fence future completes. Application timers inside the node and the fence timer all register deadlines in the same Tokio time driver.
 
-DST uses this sleep fence instead of `tokio::time::advance(duration)` because the fence lets Tokio walk through intermediate deadlines. If a heartbeat is due at `+400ms` and the fence is at `+1s`, the heartbeat wakes before the fence resolves. A direct `advance(1s)` jumps the saved clock in one move and does not wait for every timer it jumped past to run.
+This is why the simulator uses a sleep fence rather than simply jumping the clock forward. If an application heartbeat is due at `+400ms` and the fence is due at `+1s`, Tokio wakes the heartbeat before the fence resolves. A direct clock jump can skip over that shape of execution unless the caller separately drives every intermediate timer.
 
-This is also why long simulated waits are cheap. A node can `sleep(Duration::from_secs(3600)).await` without making the test wait an hour of wall-clock time. The runtime advances paused time to timer deadlines; idle gaps are skipped.
+This is also why long simulated waits are cheap. A task can `sleep(Duration::from_secs(3600)).await` without making the test wait an hour of wall-clock time. When the runtime has no runnable work except timers, paused Tokio time can move directly to the next timer deadline.
 
 ### What Tokio does while the fence is pending {#the-timer-wheel}
 
@@ -244,19 +240,48 @@ Tokio's traditional time driver is a hashed timing wheel: six levels, 64 slots p
 
 On an unpaused runtime, parking means waiting on the OS until the next timer is due. On a paused runtime, the parking path checks whether the clock can auto-advance. If it can, Tokio performs a zero-duration park and, if nothing else woke the runtime, advances the paused clock by the time until the next timer. Then the time driver processes expired wheel entries and wakes their tasks.
 
-So a node tick is this loop with a fence deadline: poll ready work, park, advance to the next timer, wake expired tasks, poll again, and repeat. When the next expired timer is the fence, `run_until` returns and DST moves to the next node. The wall clock did not move the node forward; Tokio's saved clock moved because the runtime had reached an idle timer boundary.
+So a node tick is this loop with a fence deadline: poll ready work, park, advance to the next timer, wake expired tasks, poll again, and repeat. When the next expired timer is the fence, `run_until` returns. The wall clock did not move the node forward; Tokio's saved clock moved because the runtime reached an idle timer boundary.
 
 [[WIDGET:timer-wheel]]
 
-[[WIDGET:clock-handoff]]
+### Tokio choices that still need to be pinned down {#tokio-internals}
 
-### The simulator's shared time shows up at the network boundary {#simulation-time-boundary}
+Paused time removes host time from Tokio timers, but Tokio can still make choices. Deterministic replay needs those choices to be either removed by construction or pinned to the seed.
 
-So far, the story has stayed inside one node. That is the right place to begin because it explains how normal Tokio code progresses. But the simulator also needs one shared coordinate system for things that are not private to a node: packet delivery, link faults, observers, run duration, and OS-clock hooks.
+The first choice is worker scheduling. `new_current_thread` is a requirement, not a preference. A multi-threaded runtime has worker queues and work stealing; two ready tasks can be polled in different orders depending on which OS worker gets scheduled first. A current-thread runtime has one worker and one local scheduling context, so there is no worker race inside a node.
 
-That shared coordinate is `TickContext::elapsed`. It is not the value returned by a node's `tokio::time::Instant::now()`. It is the harness-level simulation time used by the network and the driver.
+[[WIDGET:work-stealing]]
 
-The outer step advances that shared time in `tick_step`:
+The second choice is `tokio::select!`. By default, `select!` does not always poll branches top-to-bottom. The macro generates a pseudo-random starting branch so a loop does not structurally favor the first branch forever. That is good production fairness and bad replay unless the randomness is controlled.
+
+The runtime seed closes that gap. DST derives a node-specific seed from the simulation seed and passes it to Tokio's `Builder::rng_seed`, making Tokio-level pseudo-random choices replayable for a fixed seed.
+
+[[WIDGET:select-seed]]
+
+This gives us the Tokio half of the story: a node can run ordinary async Rust code, with timers controlled by a paused runtime and Tokio-level scheduling choices pinned down. The next section describes the simulator around those runtimes: the shared driver clock, packet heap, seeded faults, OS hooks, and replay hash.
+
+## Anatomy of the framework: four layers over a seed {#dst-project}
+
+The Tokio section explained how one node can run ordinary async Rust code on paused time. That is only one piece of deterministic simulation.
+
+A distributed test also needs a shared world around those nodes: one clock for packet delivery, one place where faults are chosen, one network model, and one record of what happened. The framework puts four layers between the system under test and the host machine:
+
+1. a **driver** that decides when the world moves forward,
+2. **node runtimes** that make async code run on paused Tokio time,
+3. a **deterministic network and PRNG** that turn packet timing, loss, delay, and node order into seeded choices,
+4. **OS hooks** that catch clock and entropy reads that bypass Tokio.
+
+One seed enters at the top. Every controlled choice flows from it. The result is a run that can be replayed by giving the simulator the same seed again.
+
+[[WIDGET:four-layers]]
+
+### Layer 1: the driver {#driver-layer}
+
+The first layer is the **driver**. It is the heartbeat from earlier in the post: deliver what is due, run the nodes, advance virtual time, and record what happened. Nothing moves in the background. A node does not make progress because an OS thread happened to wake up; it makes progress because the driver gave it a tick.
+
+The driver owns the shared simulation time, `TickContext::elapsed`. This is the clock used for cross-node effects: packet delivery, link faults, observers, run duration, and history recording.
+
+A step has a fixed shape:
 
 ```rust
 pub(crate) fn tick_step(input: TickInput<'_>) -> Result<TickOutput, Error> {
@@ -297,62 +322,66 @@ The order is part of the model. At the beginning of a step, DST delivers every p
 
 [[WIDGET:step-loop]]
 
-Each node is activated through `TickContext::activate`, which installs the simulation context in scoped thread-local storage. That is why `UdpSocket::bind`, `UdpSocket::send_to`, and the optional clock hooks can tell which node is currently executing. While the node is active, DST calls `rt.tick(sim_tick)`. Only after every live node has been stepped does the harness advance `ctx.elapsed += sim_tick`.
+Only after every live node has been stepped does the harness advance `ctx.elapsed += sim_tick`. That keeps cross-node effects step-granular and replayable: packets, faults, observers, and history recording all share the same simulation coordinate system.
 
-This makes network delivery step-granular. `UdpSocket::send_to` stamps a packet with the current `ctx.elapsed`. The network computes `deliver_at = now + latency + extra_delay`, stores packets in a min-heap keyed by `(deliver_at, seq)`, and delivers due packets at the start of later steps. A packet sent midway through a node's Tokio tick is still stamped with the simulation step time, not with a separate intra-node Tokio timestamp.
+### Layer 2: node runtimes {#node-runtime-layer}
 
-At this point it is finally useful to name the split: Tokio time is private to each node runtime; simulation time is the shared clock the harness uses for cross-node effects. They move together by construction during ordinary ticks, but they serve different purposes.
+The second layer is the **node runtime**. Each simulated host or client runs inside its own current-thread Tokio runtime with time paused. That lets ordinary async code keep using `tokio::time::sleep`, `timeout`, `interval`, and heartbeat loops, while the simulator decides when those timers fire.
+
+The driver advances a node by activating it and calling `NodeRuntime::tick`:
+
+```rust
+pub fn tick(&mut self, duration: Duration) -> Result<bool, Error> {
+    if self.crashed || self.finished {
+        return Ok(self.finished);
+    }
+
+    self.tokio.block_on(async {
+        self.local
+            .run_until(async {
+                tokio::time::sleep(duration).await;
+            })
+            .await;
+    });
+
+    // ... then check whether the node task has finished
+}
+```
+
+Each node is activated through `TickContext::activate`, which installs the simulation context in scoped thread-local storage. That is how APIs such as `UdpSocket::bind`, `UdpSocket::send_to`, and the optional clock hooks can tell which node is currently executing.
+
+[[WIDGET:clock-handoff]]
+
+This is where it is useful to name the split between the two clocks.
+
+Tokio time is private to each node runtime. It drives that node's sleeps, intervals, timeouts, and heartbeat tasks.
+
+Simulation time is shared by the harness. It drives packet delivery, fault timing, observers, OS-clock hooks, and the global run budget.
+
+During ordinary ticks, the driver advances them together: each node is allowed to make `sim_tick` worth of Tokio-time progress, and then the shared `TickContext::elapsed` advances by the same amount. They move together by construction, but they serve different purposes.
 
 [[WIDGET:two-clocks]]
 
-### The raw-clock boundary {#raw-clock-boundary}
-
-`start_paused(true)` controls Tokio APIs: `tokio::time::sleep`, `timeout`, `interval`, and `tokio::time::Instant::now()`. It does not automatically virtualize every clock read in the process.
-
-A dependency that calls `std::time::Instant::now()`, `SystemTime::now()`, or raw `clock_gettime` can still reach the host clock. DST's optional Unix `os-clock-hooks` close part of that gap by interposing `clock_gettime` while execution is inside a node context. Those hooks return the published `TickContext::elapsed` for monotonic clocks and `wall_epoch + elapsed` for realtime clocks. Outside node context, or without the hooks, raw clock reads fall back to the host.
-
-### Where Tokio can still choose {#tokio-internals}
-
-Paused time removes host time from Tokio timers, but the runtime can still make scheduling choices. DST either eliminates those choices by construction or pins them to the seed.
-
-The first choice is worker scheduling. `new_current_thread` is a requirement, not a preference. A multi-threaded runtime has worker queues and work stealing; two ready tasks can be polled in different orders depending on which OS worker gets scheduled first. A current-thread runtime has one worker and one local scheduling context, so there is no worker race inside a node.
-
-[[WIDGET:work-stealing]]
-
-The second choice is `tokio::select!`. By default, `select!` does not always poll branches top-to-bottom. The macro generates a pseudo-random starting branch so a loop does not structurally favor the first branch forever. That is good production fairness and bad replay unless the randomness is controlled.
-
-DST controls it by deriving a node-specific seed and passing it to Tokio's `Builder::rng_seed`.
-
-[[WIDGET:select-seed]]
-
-The complete time story is therefore layered, not mysterious: DST steps nodes one at a time; each node advances normal Tokio timers by awaiting a sleep fence; Tokio auto-advances the paused node clock through timer deadlines; the network and faults use the shared `TickContext::elapsed`; and raw OS clock reads are virtual only when DST's optional hooks intercept them inside node context.
-
-## Anatomy of the framework: four layers over a seed {#dst-project}
-
-At this point, the idea is simple: take a distributed system full of clocks, packets, retries, random choices, crashes, and task scheduling — and make the whole thing answer to one seed.
-
-The framework does that by putting four layers between the system under test and the host machine:
-
-1. a **driver** that decides when the world moves forward,
-2. **node runtimes** that make async code run on virtual time,
-3. a **deterministic network and PRNG** that turn packet timing and loss into seeded choices,
-4. **OS hooks** that catch the clock and entropy reads that libraries perform underneath Tokio.
-
-One seed enters at the top. Every controlled choice flows from it. The result is a run that can be replayed by giving the simulator the same seed again.
-
-[[WIDGET:four-layers]]
-
-The first layer is the **driver**. It is the heartbeat from earlier in the post: deliver what is due, run the nodes, advance virtual time, record what happened. Nothing moves in the background. A node does not make progress because an OS thread happened to wake up; it makes progress because the driver gave it a tick.
-
-The second layer is the **node runtime**. Each simulated host or client runs inside its own current-thread Tokio runtime with time paused. That lets ordinary async code keep using `tokio::time::sleep`, `timeout`, `interval`, and heartbeat loops, while the simulator decides when those timers fire. From the application’s point of view, time passes normally. From the test’s point of view, time is just another value derived from the run.
+### Layer 3: deterministic network and PRNG {#network-layer}
 
 The third layer is the **deterministic substrate**: the seeded PRNG plus the simulated network. This is where the seed becomes visible as behavior. Should a packet be delayed? How long should the delay be? Should this link drop traffic? If several packets become deliverable at the same virtual instant, which one arrives first? In a real deployment, the kernel and network decide those things. In the simulator, the seeded model decides them.
 
+When application code sends a packet, it does not go to the operating system. The socket implementation looks at the active node context and hands the packet to the simulated network. A send is stamped with the current shared simulation time:
+
+```rust
+let now = ctx.elapsed;
+let deliver_at = now + latency + extra_delay;
+```
+
+The packet is stored in a min-heap keyed by `(deliver_at, seq)`. The delivery time decides when the packet becomes visible. The sequence number breaks ties, so packets due at the same instant still have a deterministic order. At the start of each driver step, `deliver_due_packets(ctx.elapsed)` moves every due packet into the receiver's inbox.
+
 [[WIDGET:packet-heap]]
 
-The packet heap is the important visual here. Instead of sending bytes to a real socket, the simulator schedules packets for future virtual times. A packet sits in the heap until its delivery time arrives. When the driver reaches that time, the packet is moved into the receiver’s inbox.
+The packet heap is the important visual here. Instead of sending bytes to a real socket, the simulator schedules packets for future virtual times. A packet sits in the heap until its delivery time arrives. When the driver reaches that time, the packet is moved into the receiver's inbox.
 
 That one substitution changes the meaning of the network. Packet delivery is no longer “whatever the OS and NIC happened to do.” It is an ordered, replayable part of the test. Same seed, same delays, same delivery order.
+
+[[WIDGET:packet-admission]]
 
 Faults are layered on top of the same network model. The key distinction is between **dropping** and **holding** traffic.
 
@@ -362,13 +391,21 @@ A partition is a cut wire: traffic across that link is discarded. A hold is a cl
 
 That is why the framework exposes both. A partition asks, “Can the system tolerate loss?” A hold asks, “Can the system tolerate time, backlog, and reordering pressure?”
 
-[[WIDGET:packet-admission]]
+The same seeded PRNG drives these choices. Change the seed and the simulator explores a different execution. Keep the seed and it replays the same network behavior, node order, and fault sequence.
 
-The fourth layer is **OS interposition**. Tokio’s paused clock handles code that uses Tokio time, but real systems often depend on libraries that call lower-level APIs directly: `clock_gettime`, `SystemTime`, `getrandom`, or platform entropy functions. Those reads bypass the simulator unless they are intercepted.
+### Layer 4: OS interposition {#os-hooks-layer}
+
+The fourth layer is **OS interposition**. Tokio's paused clock handles code that uses Tokio time: `tokio::time::sleep`, `timeout`, `interval`, and `tokio::time::Instant::now()`.
+
+It does not automatically virtualize every clock or entropy read in the process. A dependency that calls `std::time::Instant::now()`, `SystemTime::now()`, raw `clock_gettime`, `getrandom`, or another platform entropy source can still reach the host.
 
 [[WIDGET:os-hooks]]
 
-The OS hooks are the escape hatch for that. When enabled, clock reads made inside simulated node execution return simulation time instead of host time, and entropy reads can be served from a seeded generator instead of the operating system. This is not magic, and it is not a replacement for designing deterministic code, but it closes an important class of leaks from dependencies that were never written with simulation in mind.
+The optional OS hooks close part of that gap. While execution is inside an active node context, clock reads can return simulation time instead of host time, and entropy reads can be served from a seeded generator instead of the operating system. For monotonic clocks, the hook returns the published `TickContext::elapsed`. For realtime clocks, it can return `wall_epoch + elapsed`. Outside node context, or without the hooks enabled, those calls fall back to host behavior.
+
+This is not magic, and it is not a replacement for designing deterministic code, but it closes an important class of leaks from dependencies that were never written with simulation in mind.
+
+### The receipt: history hash {#history-hash}
 
 The final piece is not another layer; it is the receipt. Every meaningful event — packet delivered, packet dropped, node crashed, link repaired — is recorded into a history hash. The hash is not there to explain the bug by itself. It is there to prove that a replay really walked the same path.
 
@@ -376,13 +413,13 @@ The final piece is not another layer; it is the receipt. Every meaningful event 
 
 That is the framework in one picture: the seed feeds the driver, the driver advances paused runtimes, the network turns messages into scheduled events, the hooks catch hidden host reads, and the history hash tells you whether the contract held.
 
-## Using it to test our Distributed KV Store {#testing-tapir}
+## Using it to test our Distributed KV Store {#testing-ds}
 
 A deterministic simulator is only useful if the system under test can be placed inside it without rewriting the system.
 
 That starts with a design choice that is worth making even before DST exists: the core code should talk to the outside world through interfaces. Networking, storage, time, randomness, and background execution should sit behind seams that can be swapped. In production, those seams point at the real implementation. In tests, they can point at a controlled one.
 
-That is what made the TAPIR simulation practical. The replica code did not need a separate "simulation version". It already sent messages through a transport boundary, so the simulator only had to replace the transport underneath it.
+That is what made the simulation practical. The replica code did not need a separate "simulation version". It already sent messages through a transport boundary, so the simulator only had to replace the transport underneath it.
 
 ### The seam: swap the world, not the protocol {#transport-seam}
 
@@ -411,7 +448,7 @@ This is the shape I would aim for in any system I wanted to test this way:
 
 Once those boundaries exist, the test cluster becomes a small in-process deployment. The harness starts a few replica hosts, starts one or more clients, and lets the simulator drive the world forward. A test can then read almost like an integration test: bring up nodes, issue a transaction, crash or partition something, and assert what must still be true.
 
-### Start with concrete tests {#tapir-concrete-tests}
+### Start with concrete tests {#ds-concrete-tests}
 
 The first useful tests do not need to explain the whole protocol. They should ask small, concrete questions:
 
@@ -421,7 +458,7 @@ The first useful tests do not need to explain the whole protocol. They should as
 
 Those are good DST tests because each one has a seed. If the unlucky timing exposes a bug, that timing is no longer lost. The seed is the address of the run.
 
-[[WIDGET:tapir-commit]]
+[[WIDGET:ds-commit]]
 
 The tests can stay readable because the complicated part is outside the test body. The harness owns cluster construction, node startup, simulated transport, and clock setup. The test owns only the scenario it wants to exercise.
 
@@ -444,7 +481,7 @@ The exact helper names are not the point. The point is the shape: production cod
 
 [[WIDGET:host-client-lifetime]]
 
-### Then let the seed choose the details {#tapir-scenarios}
+### Then let the seed choose the details {#ds-scenarios}
 
 Hand-written scripts are good regressions. They are not enough for exploration. Once the basic seams work, the next step is to describe a kind of world rather than a fixed timestamp-by-timestamp script.
 
@@ -484,7 +521,7 @@ The scenario does not have to reveal the internals of the protocol. It only need
 
 The simulator is the adversary. The seed is how we replay the adversary.
 
-### What to assert: safety first, liveness with a budget {#tapir-invariants}
+### What to assert: safety first, liveness with a budget {#ds-invariants}
 
 Faults only create pressure. Invariants decide whether the system survived it.
 
@@ -513,15 +550,19 @@ enum Invariant {
 
 This is enough detail for the reader. We do not need to walk through every internal message or recovery path. The important idea is that DST separates the pressure from the judgment: the fault profile creates possible executions, and the invariants define what must hold across all of them.
 
-### Replay is the payoff {#tapir-replay}
+### Replay is the payoff {#ds-replay}
 
-When a run fails, the debugging loop is simple:
+When a run fails, the debugging loop should be boring:
 
 ```bash
 DST_SEED=<failing-seed> cargo test <test-name>
 ```
 
-That is the point of using DST here. The simulator is not a separate model of our KV store TAPIR. It is the same core code placed behind replaceable interfaces, driven by virtual time, a simulated network, seeded faults, and replayable invariants.
+The same seed reconstructs the same world: the same packet delays, the same node crashes, the same timer deadlines, the same partitions, and the same assertion failure.
+
+[[WIDGET:same-seed-replay]]
+
+That is the point of using DST here. The simulator is not a separate model of the algorithm. It is the same core code placed behind replaceable interfaces, driven by virtual time, a simulated network, seeded faults, and replayable invariants.
 
 > The protocol stays the protocol. The world around it becomes deterministic.
 
@@ -559,9 +600,3 @@ Primary sources behind the ideas in this post, grouped by topic. Where possible 
 - [Tokio docs: tokio::time::pause](https://docs.rs/tokio/latest/tokio/time/fn.pause.html) — API reference for pausing and auto-advancing virtual time, the building block for fast, deterministic time-based tests.
 - [Tokio: Testing](https://tokio.rs/tokio/topics/testing) — official guidance on testing async code, including time control with the paused clock.
 - [madsim-rs/madsim](https://github.com/madsim-rs/madsim) — a deterministic async runtime that intercepts time, randomness, and networking to make Tokio-based systems fully reproducible.
-
-**TAPIR & Viewstamped Replication**
-
-- [Zhang et al., "Building Consistent Transactions with Inconsistent Replication" (ACM TOCS, 2018)](https://dl.acm.org/doi/10.1145/3269981) — the TAPIR paper: strong transactional consistency built atop a deliberately inconsistent replication layer.
-- [Oki & Liskov, "Viewstamped Replication" (PODC 1988)](http://pmg.csail.mit.edu/papers/vr.pdf) — the original VR paper introducing view changes and viewstamps for highly-available primary-copy replication.
-- [Liskov & Cowling, "Viewstamped Replication Revisited" (MIT, 2012)](http://pmg.csail.mit.edu/papers/vr-revisited.pdf) — the modern restatement of VR that most contemporary implementations (including TigerBeetle) follow.

@@ -43,9 +43,9 @@
 
   // Plain-English label first; the textbook term is a small tag.
   const LANES = [
-    { plain: 'real wire (production)', sub: 'UdpTransport · real UDP datagrams over the host network',
+    { plain: 'real wire (production)', sub: 'real UDP over the host network',
       tag: 'dyn Transport = UdpTransport', zone: 'blue',  mode: 'prod' },
-    { plain: 'simulated wire (tests)', sub: 'sim transport · dst::UdpSocket on the backplane heap',
+    { plain: 'simulated wire (tests)', sub: 'dst::UdpSocket on the sim backplane',
       tag: 'dyn Transport = sim transport', zone: 'purple', mode: 'sim' },
   ];
 
@@ -127,9 +127,9 @@ let bus = ClusterBus::start((transport, rx), cfg, cluster, replica);`;
       txt(W / 2, SLOT.y + SLOT.h + 17, c.muted, 9.5, 400, 'middle').textContent =
         'swap only this — the two wires below fill the same slot';
 
-      // legend for the cell colours
-      legendSwatch(CX0, laneY(0) - 12, c.green, 'arrived');
-      legendSwatch(CX0 + 92, laneY(0) - 12, c.red, 'lost');
+      // legend for the cell colours — far right, clear of the centered seam caption
+      legendSwatch(W - 190, laneY(0) - 12, c.green, 'arrived');
+      legendSwatch(W - 96, laneY(0) - 12, c.red, 'lost');
 
       // two wire lanes
       LANES.forEach((L, i) => {

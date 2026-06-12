@@ -19,6 +19,6 @@
   "work-stealing": { "g": "DSTWorkStealing", "t": "Work-stealing vs one thread", "s": "two ready tasks race in prod; one thread does not" },
   "timer-wheel": { "g": "DSTTimerWheel", "t": "The hashed timing wheel", "s": "six levels; deadlines cascade, idle gaps skip" },
   "two-clocks": { "g": "DSTTwoClocks", "t": "Two clocks: private vs shared", "s": "node Tokio time vs TickContext::elapsed" },
-  "tapir-commit": { "g": "DSTTapirCommit", "t": "TAPIR: one-round-trip commit", "s": "supermajority agrees, no leader" },
+  "ds-commit": { "g": "DSTCommit", "t": "DS: one-round-trip commit", "s": "supermajority agrees, no leader" },
   "host-client-lifetime": { "g": "DSTHostClientLifetime", "t": "Hosts vs clients", "s": "crashable & pending forever vs ends the run" }
 }

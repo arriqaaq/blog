@@ -3,66 +3,108 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Learning DST for testing our distributed transactional KV store</title>
 <meta name="description" content="Building a deterministic simulation tester.">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
 <style>
-  :root{ color-scheme:light dark; --fg:#1f2430; --bg:#fbfbfc; --muted:#5b6472; --rule:rgba(0,0,0,.1);
-    --accent:#7c3aed; --code:rgba(124,58,237,.07); --quote:rgba(124,58,237,.06); }
-  html[data-mode=dark]{ --fg:#e6e8ec; --bg:#14151a; --muted:#9aa3b2; --rule:rgba(255,255,255,.12);
-    --accent:#a78bfa; --code:rgba(167,139,250,.13); --quote:rgba(167,139,250,.08); }
+  :root{ color-scheme:light dark;
+    --primary:#7c5cfc; --secondary:#c471f5; --grad:linear-gradient(135deg,#7c5cfc,#c471f5);
+    --bg:#f6f4f9; --surface:#ffffff; --fg:#0a1320; --muted:#5b6478;
+    --rule:rgba(18,14,45,.1); --shadow:rgba(124,92,252,.18);
+    --code:rgba(124,92,252,.06); --quote:rgba(196,113,245,.07);
+    --mesh-a:rgba(124,92,252,.13); --mesh-b:rgba(196,113,245,.1);
+    --hl-kw:#7c3aed; --hl-fn:#2563eb; --hl-type:#0e7490; --hl-str:#0a7d4f; --hl-num:#b45309; --hl-com:#8b93a7; --hl-meta:#9333ea;
+    /* swap --font-body to a licensed 'Tiempos Text' here if you ever buy a Klim web licence */
+    --font-head:'Geist','Inter',system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --font-body:'Source Serif 4',Georgia,Cambria,'Times New Roman',serif;
+    --font-mono:'JetBrains Mono',ui-monospace,'SF Mono','Fira Code',monospace; }
+  html[data-mode=dark]{ --bg:#0e0f16; --surface:#181a26; --fg:#ecedf5; --muted:#9aa3b6;
+    --rule:rgba(255,255,255,.1); --shadow:rgba(124,92,252,.32);
+    --code:rgba(167,139,250,.12); --quote:rgba(196,113,245,.1);
+    --mesh-a:rgba(124,92,252,.17); --mesh-b:rgba(196,113,245,.12);
+    --hl-kw:#c4a7ff; --hl-fn:#82aaff; --hl-type:#56d4dd; --hl-str:#7ee787; --hl-num:#ffb86c; --hl-com:#6b7686; --hl-meta:#d6a3ff; }
+  *{ box-sizing:border-box; }
   html,body{ background:var(--bg); color:var(--fg); margin:0; }
-  body{ font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif; line-height:1.68; }
-  .wrap{ max-width:740px; margin:0 auto; padding:0 1.1rem 6rem; }
-  header.post{ max-width:740px; margin:0 auto; padding:3rem 1.1rem 1.2rem; }
-  .eyebrow{ font:600 .74rem/1 ui-monospace,monospace; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin-bottom:.9rem; }
-  h1{ font-size:2.6rem; line-height:1.08; margin:0 0 .6rem; letter-spacing:-.02em; }
-  .dek{ font-size:1.16rem; color:var(--muted); margin:0 0 1.1rem; }
-  .byline{ font-size:.84rem; color:var(--muted); border-top:1px solid var(--rule); padding-top:.9rem; }
-  .toc{ max-width:740px; margin:1.4rem auto 0; padding:1rem 1.1rem; border:1px solid var(--rule); border-radius:12px; }
-  .toc h2{ font-size:.74rem; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); margin:.1rem 0 .7rem; border:0; padding:0; }
+  body{ font-family:var(--font-body); line-height:1.72; -webkit-font-smoothing:antialiased;
+    background:
+      radial-gradient(48rem 40rem at 50% -14rem,var(--mesh-a),transparent 70%),
+      radial-gradient(34rem 30rem at 112% -6rem,var(--mesh-b),transparent 66%),
+      var(--bg);
+    background-attachment:fixed; }
+  .wrap{ max-width:720px; margin:0 auto; padding:0 1.15rem 6rem; }
+  header.post{ max-width:720px; margin:0 auto; padding:3.2rem 1.15rem 1.4rem; }
+  .eyebrow{ font:600 .72rem/1 var(--font-mono); letter-spacing:.16em; text-transform:uppercase; margin-bottom:1rem;
+    background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; width:fit-content; }
+  h1{ font-family:var(--font-head); font-size:clamp(2.1rem,5vw,2.9rem); font-weight:700; line-height:1.08; letter-spacing:-.025em;
+    margin:0 0 .7rem; width:fit-content; max-width:100%;
+    background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .dek{ font-size:1.24rem; color:var(--muted); margin:0 0 1.2rem; font-style:italic; }
+  .byline{ font-family:var(--font-head); font-size:.82rem; color:var(--muted); border-top:1px solid var(--rule); padding-top:1rem; }
+  .toc{ max-width:720px; margin:1.6rem auto 0; padding:1.1rem 1.25rem; border:1px solid var(--rule); border-radius:14px;
+    background:var(--surface); box-shadow:0 1px 2px rgba(10,12,30,.04); }
+  .toc h2{ font-family:var(--font-head); font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:.16em; color:var(--muted); margin:.1rem 0 .8rem; border:0; padding:0; }
   .toc ol{ list-style:none; margin:0; padding:0; }
-  .toc li{ break-inside:avoid; margin:.22rem 0; font-size:.92rem; }
-  .toc-n{ color:var(--accent); font:600 .76rem ui-monospace,monospace; margin-right:.5rem; }
-  .toc a{ color:var(--fg); text-decoration:none; } .toc a:hover{ text-decoration:underline; }
-  article{ font-size:1.07rem; }
-  h2{ font-size:1.6rem; line-height:1.18; margin:2.6rem 0 .9rem; letter-spacing:-.01em; border-top:1px solid var(--rule); padding-top:2rem; }
+  .toc li{ break-inside:avoid; margin:.28rem 0; font-family:var(--font-head); font-size:.94rem; }
+  .toc-n{ font:600 .76rem var(--font-mono); margin-right:.55rem;
+    background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .toc a{ color:var(--fg); text-decoration:none; } .toc a:hover{ color:var(--primary); }
+  article{ font-size:1.12rem; }
+  h2{ font-family:var(--font-head); font-size:1.65rem; font-weight:700; line-height:1.18; margin:3rem 0 1rem; letter-spacing:-.015em; border-top:1px solid var(--rule); padding-top:2.2rem; }
   .sec:first-of-type h2{ border-top:0; padding-top:.4rem; margin-top:.6rem; }
-  h3{ font-size:1.16rem; margin:1.8rem 0 .6rem; }
-  p{ margin:0 0 1.05rem; } strong{ font-weight:700; } a{ color:var(--accent); }
-  code{ font-family:ui-monospace,'SF Mono','Fira Code',monospace; font-size:.88em; background:var(--code); padding:.1rem .34rem; border-radius:5px; }
-  pre{ background:var(--code); border:1px solid var(--rule); border-radius:10px; padding:.9rem 1.05rem; overflow:auto; font-size:.86rem; line-height:1.5; }
+  h3{ font-family:var(--font-head); font-size:1.2rem; font-weight:600; margin:2rem 0 .6rem; }
+  p{ margin:0 0 1.1rem; } strong{ font-weight:600; }
+  a{ color:var(--primary); text-decoration:none; }
+  a:hover{ color:var(--secondary); }
+  article p a,article li a{ border-bottom:1px solid rgba(124,92,252,.32); }
+  article p a:hover,article li a:hover{ color:var(--primary); border-bottom-color:var(--primary); }
+  code{ font-family:var(--font-mono); font-size:.85em; background:var(--code); padding:.12rem .36rem; border-radius:5px; }
+  pre{ font-family:var(--font-mono); background:var(--surface); border:1px solid var(--rule); border-radius:12px; padding:1rem 1.15rem; overflow:auto; font-size:.85rem; line-height:1.55; box-shadow:0 1px 2px rgba(10,12,30,.04); }
   pre code{ background:none; padding:0; }
-  blockquote{ margin:1.3rem 0; padding:.85rem 1.15rem; background:var(--quote); border-left:3px solid var(--accent); border-radius:0 8px 8px 0; }
-  ul,ol{ margin:0 0 1.05rem; padding-left:1.3rem; } li{ margin:.3rem 0; }
-  .fig{ margin:1.7rem 0; }
-  .fig-dgm{ border:1px solid var(--rule); border-radius:12px; padding:1rem; background:var(--code); }
+  .hljs-keyword{ color:var(--hl-kw); font-weight:600; }
+  .hljs-title,.hljs-title.function_,.hljs-section{ color:var(--hl-fn); }
+  .hljs-built_in,.hljs-type,.hljs-title.class_,.hljs-class .hljs-title{ color:var(--hl-type); }
+  .hljs-string,.hljs-symbol,.hljs-char.escape_,.hljs-regexp,.hljs-bullet{ color:var(--hl-str); }
+  .hljs-number,.hljs-literal{ color:var(--hl-num); }
+  .hljs-comment,.hljs-quote{ color:var(--hl-com); font-style:italic; }
+  .hljs-meta,.hljs-attr,.hljs-attribute,.hljs-name,.hljs-tag{ color:var(--hl-meta); }
+  .hljs-operator,.hljs-punctuation{ color:var(--muted); }
+  .hljs-variable,.hljs-property,.hljs-params{ color:var(--fg); }
+  .hljs-deletion{ color:#dc2626; } .hljs-addition{ color:var(--hl-str); }
+  .hljs-emphasis{ font-style:italic; } .hljs-strong{ font-weight:700; }
+  blockquote{ margin:1.5rem 0; padding:.95rem 1.25rem; background:var(--quote); border-left:3px solid var(--primary); border-radius:0 10px 10px 0; font-style:italic; }
+  ul,ol{ margin:0 0 1.1rem; padding-left:1.35rem; } li{ margin:.35rem 0; }
+  .fig{ margin:1.9rem 0; }
+  .fig-dgm{ border:1px solid var(--rule); border-radius:14px; padding:1.1rem; background:var(--surface); box-shadow:0 1px 2px rgba(10,12,30,.04); }
   .dgm-svg{ display:block; width:100%; height:auto; }
-  .fig svg text{ font-family:'Space Grotesk',ui-monospace,monospace; }
-  .fig figcaption{ font-size:.8rem; color:var(--muted); text-align:center; margin-top:.5rem; }
-  table.cmp{ border-collapse:collapse; width:100%; font-size:.85rem; }
-  table.cmp th,table.cmp td{ border:1px solid var(--rule); padding:.45rem .6rem; text-align:left; vertical-align:top; }
-  table.cmp th{ background:var(--code); font-weight:700; } .cmp-wrap{ overflow-x:auto; }
-  .missing{ color:#dc2626; font:600 .85rem ui-monospace,monospace; text-align:center; padding:1rem; border:1px dashed #dc2626; border-radius:8px; }
-  .topbar{ position:sticky; top:0; z-index:5; backdrop-filter:blur(8px); background:color-mix(in srgb,var(--bg) 84%,transparent); border-bottom:1px solid var(--rule); }
-  .topbar .in{ max-width:740px; margin:0 auto; padding:.5rem 1.1rem; display:flex; justify-content:space-between; align-items:center; font-size:.82rem; }
-  .topbar a{ color:var(--muted); text-decoration:none; } .topbar button{ font:inherit; cursor:pointer; background:transparent; border:1px solid var(--rule); color:inherit; border-radius:6px; padding:.25rem .55rem; }</style></head>
+  .fig svg text{ font-family:var(--font-head); }
+  .fig figcaption{ font-family:var(--font-head); font-size:.8rem; color:var(--muted); text-align:center; margin-top:.6rem; }
+  .fig figcaption a{ border:0; }
+  table.cmp{ border-collapse:collapse; width:100%; font-family:var(--font-head); font-size:.85rem; }
+  table.cmp th,table.cmp td{ border:1px solid var(--rule); padding:.5rem .65rem; text-align:left; vertical-align:top; }
+  table.cmp th{ background:var(--code); font-weight:600; } .cmp-wrap{ overflow-x:auto; }
+  .missing{ color:#dc2626; font:600 .85rem var(--font-mono); text-align:center; padding:1rem; border:1px dashed #dc2626; border-radius:8px; }
+  .topbar{ position:sticky; top:0; z-index:5; backdrop-filter:blur(10px); background:color-mix(in srgb,var(--bg) 82%,transparent); border-bottom:1px solid var(--rule); }
+  .topbar .in{ max-width:720px; margin:0 auto; padding:.55rem 1.15rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; font-family:var(--font-head); font-size:.82rem; }
+  .topbar a{ color:var(--muted); text-decoration:none; } .topbar a:hover{ color:var(--fg); }
+  .topbar span{ color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .topbar button{ font:inherit; cursor:pointer; background:var(--surface); border:1px solid var(--rule); color:var(--muted); border-radius:999px; padding:.28rem .7rem; transition:border-color .2s,color .2s; }
+  .topbar button:hover{ border-color:var(--primary); color:var(--fg); }</style></head>
 <body>
 <div class="topbar"><div class="in"><a href="../index.html">← all posts</a><span>Learning DST for testing our distributed transactional KV store</span><button id="theme">light / dark</button></div></div>
 <header class="post">
   <div class="eyebrow">Deterministic Simulation Testing</div>
   <h1>Learning DST for testing our distributed transactional KV store</h1>
   <p class="dek">Building a deterministic simulation tester.</p>
-  <p class="byline">A build log on dst — a from-scratch DST runtime, standing on Tokio, Turmoil, madsim, and FoundationDB. ~4,828 words · 21 interactive widgets · 4 diagrams</p>
+  <p class="byline">A build log on dst — a from-scratch DST runtime, standing on Tokio, Turmoil, madsim, and FoundationDB. ~4,938 words · 22 interactive widgets · 4 diagrams</p>
 </header>
 <nav class="toc"><h2>Contents</h2><ol>
 <li><span class="toc-n">01</span><a href="#what-is-dst">What deterministic simulation testing actually is</a></li>
-<li><span class="toc-n">02</span><a href="#tokio-tick">Building upon Tokio</a></li>
+<li><span class="toc-n">02</span><a href="#tokio-tick">Building upon Tokio: making async time controllable</a></li>
 <li><span class="toc-n">03</span><a href="#dst-project">Anatomy of the framework: four layers over a seed</a></li>
-<li><span class="toc-n">04</span><a href="#testing-tapir">Using it to test our Distributed KV Store</a></li>
+<li><span class="toc-n">04</span><a href="#testing-ds">Using it to test our Distributed KV Store</a></li>
 <li><span class="toc-n">05</span><a href="#references">References</a></li>
 </ol></nav>
 <div class="wrap"><article>
 <section class="sec">
-<p>We&#39;ve been building our distributed transactional key-value store over the past year. Two aspects that have always intrigued me are correctness and reproducibility. Having read multiple Jepsen reports, I&#39;ve seen how difficult it can be to reproduce novel bugs once they&#39;re discovered.</p>
+<p>We&#39;ve been building our distributed transactional key-value store over the past year at <a href="https://surrealdb.com/">SurrealDB</a>. Two aspects that have always intrigued me are correctness and reproducibility. Having read multiple Jepsen reports, I&#39;ve seen how difficult it can be to reproduce novel bugs once they&#39;re discovered.</p>
 <p>Deterministic Simulation Testing (DST) is an interesting approach to addressing the reproducibility problem. IMO, this is how I see it fit in</p>
 
 <figure class="fig fig-dgm"><svg class="dgm-svg" viewBox="0 0 600 340" xmlns="http://www.w3.org/2000/svg"><defs><marker id="m-green" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#16a34a"/></marker><marker id="m-blue" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#2563eb"/></marker><marker id="m-purple" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#7c3aed"/></marker><marker id="m-amber" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#d97706"/></marker><marker id="m-red" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#dc2626"/></marker><marker id="m-pink" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#db2777"/></marker><marker id="m-gray" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#64748b"/></marker><filter id="dgm-glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><line x1="70" y1="300" x2="560" y2="300" stroke="currentColor" opacity="0.3"/>
@@ -83,46 +125,43 @@
 <section class="sec">
 <h2 id="what-is-dst">What deterministic simulation testing actually is</h2>
 <p>The easiest thing to test is a pure function:</p>
-<pre><code class="language-rust">fn checkout_total(price: u64, qty: u64) -&gt; u64 {
+<pre><code class="hljs language-rust"><span class="hljs-keyword">fn</span> <span class="hljs-title function_">checkout_total</span>(price: <span class="hljs-type">u64</span>, qty: <span class="hljs-type">u64</span>) <span class="hljs-punctuation">-&gt;</span> <span class="hljs-type">u64</span> {
     price * qty
 }
-</code></pre>
-<p><em>Why</em> it&#39;s so easy? Because <code>checkout_total(300, 2)</code> is <em>always</em> <code>600</code>. The output depends on nothing but the two numbers passed to the function. If a test over it ever fails, it fails the same way every time, and the inputs that broke it sit right there in the assertion.</p>
+</code></pre><p><em>Why</em> it&#39;s so easy? Because <code>checkout_total(300, 2)</code> is <em>always</em> <code>600</code>. The output depends on nothing but the two numbers passed to the function. If a test over it ever fails, it fails the same way every time, and the inputs that broke it sit right there in the assertion.</p>
 <p>This property — <em>same input, same output</em> — is the foundation of DST. Everything else coming up is to model a system back into behaving like <code>checkout_total</code>.</p>
 <p>Now here is almost the same function, with one additional line added:</p>
-<pre><code class="language-rust">use std::time::{SystemTime, UNIX_EPOCH};
+<pre><code class="hljs language-rust"><span class="hljs-keyword">use</span> std::time::{SystemTime, UNIX_EPOCH};
 
-fn checkout_total(price: u64, qty: u64) -&gt; u64 {
-    let subtotal = price * qty;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    if now % 20 == 0 {        // a &quot;discount&quot; that fires on 1 call in 20
-        subtotal / 2
-    } else {
+<span class="hljs-keyword">fn</span> <span class="hljs-title function_">checkout_total</span>(price: <span class="hljs-type">u64</span>, qty: <span class="hljs-type">u64</span>) <span class="hljs-punctuation">-&gt;</span> <span class="hljs-type">u64</span> {
+    <span class="hljs-keyword">let</span> <span class="hljs-variable">subtotal</span> = price * qty;
+    <span class="hljs-keyword">let</span> <span class="hljs-variable">now</span> = SystemTime::<span class="hljs-title function_ invoke__">now</span>()
+        .<span class="hljs-title function_ invoke__">duration_since</span>(UNIX_EPOCH)
+        .<span class="hljs-title function_ invoke__">unwrap</span>()
+        .<span class="hljs-title function_ invoke__">as_nanos</span>();
+    <span class="hljs-keyword">if</span> now % <span class="hljs-number">20</span> == <span class="hljs-number">0</span> {        <span class="hljs-comment">// a &quot;discount&quot; that fires on 1 call in 20</span>
+        subtotal / <span class="hljs-number">2</span>
+    } <span class="hljs-keyword">else</span> {
         subtotal
     }
 }
-</code></pre>
-<p>Now <code>checkout_total(300, 2)</code> returns <code>600</code> usually. About one call in twenty it returns <code>300</code>. The output no longer depends only on its arguments; it depends on a <em>hidden input</em>, the wall clock, that the caller never sees and can never reproduce. A test that catches the <code>300</code> case catches it once and never again, because the nanosecond that triggered it is already gone.</p>
+</code></pre><p>Now <code>checkout_total(300, 2)</code> returns <code>600</code> usually. About one call in twenty it returns <code>300</code>. The output no longer depends only on its arguments; it depends on a <em>hidden input</em>, the wall clock, that the caller never sees and can never reproduce. A test that catches the <code>300</code> case catches it once and never again, because the nanosecond that triggered it is already gone.</p>
 <p>The fix is simple: stop <em>reading</em> the hidden input and start <em>passing</em> it.</p>
-<pre><code class="language-rust">fn checkout_total(price: u64, qty: u64, now_nanos: u128) -&gt; u64 {
-    let subtotal = price * qty;
-    if now_nanos % 20 == 0 {
-        subtotal / 2
-    } else {
+<pre><code class="hljs language-rust"><span class="hljs-keyword">fn</span> <span class="hljs-title function_">checkout_total</span>(price: <span class="hljs-type">u64</span>, qty: <span class="hljs-type">u64</span>, now_nanos: <span class="hljs-type">u128</span>) <span class="hljs-punctuation">-&gt;</span> <span class="hljs-type">u64</span> {
+    <span class="hljs-keyword">let</span> <span class="hljs-variable">subtotal</span> = price * qty;
+    <span class="hljs-keyword">if</span> now_nanos % <span class="hljs-number">20</span> == <span class="hljs-number">0</span> {
+        subtotal / <span class="hljs-number">2</span>
+    } <span class="hljs-keyword">else</span> {
         subtotal
     }
 }
 
-#[test]
-fn replays_forever() {
-    // the exact clock value that broke in CI — pinned, reproducible, ours
-    assert_eq!(checkout_total(300, 2, 1_700_000_000_000_000_000), 300);
+<span class="hljs-meta">#[test]</span>
+<span class="hljs-keyword">fn</span> <span class="hljs-title function_">replays_forever</span>() {
+    <span class="hljs-comment">// the exact clock value that broke in CI — pinned, reproducible, ours</span>
+    <span class="hljs-built_in">assert_eq!</span>(<span class="hljs-title function_ invoke__">checkout_total</span>(<span class="hljs-number">300</span>, <span class="hljs-number">2</span>, <span class="hljs-number">1_700_000_000_000_000_000</span>), <span class="hljs-number">300</span>);
 }
-</code></pre>
-<p>The clock went from something the function <em>reaches for</em> to something the test <em>hands it</em>. The function is pure again, and the bug now has the exact inputs that led to it — the triple <code>(300, 2, 1_700…000)</code>.</p>
+</code></pre><p>The clock went from something the function <em>reaches for</em> to something the test <em>hands it</em>. The function is pure again, and the bug now has the exact inputs that led to it — the triple <code>(300, 2, 1_700…000)</code>.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-pure-function-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/pure-function.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
@@ -137,9 +176,8 @@ fn replays_forever() {
 <p>A PRNG keeps some internal state and uses it to generate the next number in a sequence. Start it with the same seed and you&#39;ll get the exact same sequence every time. The numbers may look random, but they&#39;re completely reproducible—which turns out to be exactly what DST wants.</p>
 <p>A <em>seed</em>, then, is just the starting point for that sequence.</p>
 <p>The important thing to understand is that the seed is only one piece of the puzzle. A DST engine is deterministic because it takes control of the things that are normally left up to the operating system: packet delivery order, timer execution, task scheduling, network faults, and so on. Once those decisions are made by the simulator instead of the outside world, the execution becomes reproducible.</p>
-<pre><code class="language-rust">DST_SEED=&lt;n&gt; cargo test &lt;name&gt;
-</code></pre>
-<p>The seed simply gives the simulator a way to explore different executions while keeping each one replayable. Change the seed and you may get a different schedule, different faults, or a different delivery order. Keep the seed the same and the simulator can reconstruct the same execution again.</p>
+<pre><code class="hljs language-rust">DST_SEED=&lt;n&gt; cargo test &lt;name&gt;
+</code></pre><p>The seed simply gives the simulator a way to explore different executions while keeping each one replayable. Change the seed and you may get a different schedule, different faults, or a different delivery order. Keep the seed the same and the simulator can reconstruct the same execution again.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-same-seed-replay-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/same-seed-replay.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
@@ -202,39 +240,43 @@ fn replays_forever() {
 </section>
 
 <section class="sec">
-<h2 id="tokio-tick">Building upon Tokio</h2>
-<p>The previous sections reduced deterministic simulation to a heartbeat: deliver due messages, choose which tasks run, advance virtual time, and record what happened. That loop is easy to draw. The harder part is making ordinary async Rust code obey it without asking every application to rewrite its timers, retries, heartbeats, and timeouts from scratch.</p>
-<p>This is where we lean on Tokio instead of replacing it. Madsim rebuilds the runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves.</p>
-<h3 id="the-node-runtime">The runtime each node gets</h3>
-<p>Every simulated host or client gets its own <code>NodeRuntime</code>. That runtime is current-thread, time-enabled, and started with Tokio time paused:</p>
-<pre><code class="language-rust">fn build_runtime(sim_seed: u64, node_name: &amp;str) -&gt; Result&lt;Runtime, Error&gt; {
-    let mut builder = tokio::runtime::Builder::new_current_thread();
-    builder.enable_time().start_paused(true);
+<h2 id="tokio-tick">Building upon Tokio: making async time controllable</h2>
+<p>The previous sections reduced deterministic simulation to a heartbeat: deliver due messages, choose which work runs, advance virtual time, and record what happened. That loop is easy to describe if the system is written directly against the simulator. Real async Rust systems are not. They already use <code>tokio::time::sleep</code>, <code>timeout</code>, <code>interval</code>, heartbeat tasks, retry loops, and cancellation.</p>
+<p>So this section focuses on one narrower question:</p>
+<blockquote>
+<p>Can ordinary Tokio code run against time that the simulator controls?</p>
+</blockquote>
+<p>Tokio gives us the building block for that. Instead of replacing the async programming model, we create runtimes whose clocks are paused. Application code still awaits Tokio timers. The difference is that those timers no longer follow the host wall clock.</p>
+<p>Madsim rebuilds more of the runtime from first principles. Turmoil takes the other path: keep the Tokio programming model, but run it under a driver that decides when time moves. The approach here is closer to the Turmoil side of that split.</p>
+<h3 id="the-node-runtime">The runtime shape we need</h3>
+<p>Each simulated host or client eventually runs inside a Tokio runtime with three important properties: it is current-thread, time-enabled, and started with Tokio time paused.</p>
+<pre><code class="hljs language-rust"><span class="hljs-keyword">fn</span> <span class="hljs-title function_">build_runtime</span>(sim_seed: <span class="hljs-type">u64</span>, node_name: &amp;<span class="hljs-type">str</span>) <span class="hljs-punctuation">-&gt;</span> <span class="hljs-type">Result</span>&lt;Runtime, Error&gt; {
+    <span class="hljs-keyword">let</span> <span class="hljs-keyword">mut </span><span class="hljs-variable">builder</span> = tokio::runtime::Builder::<span class="hljs-title function_ invoke__">new_current_thread</span>();
+    builder.<span class="hljs-title function_ invoke__">enable_time</span>().<span class="hljs-title function_ invoke__">start_paused</span>(<span class="hljs-literal">true</span>);
 
-    #[cfg(all(feature = &quot;tokio-rng-seed&quot;, tokio_unstable))]
+    <span class="hljs-meta">#[cfg(all(feature = <span class="hljs-string">&quot;tokio-rng-seed&quot;</span>, tokio_unstable))]</span>
     {
-        use rand::RngCore;
+        <span class="hljs-keyword">use</span> rand::RngCore;
 
-        let node_seed =
-            crate::prng::Prng::derive_stream(sim_seed, node_name.as_bytes()).next_u64();
+        <span class="hljs-keyword">let</span> <span class="hljs-variable">node_seed</span> =
+            crate::prng::Prng::<span class="hljs-title function_ invoke__">derive_stream</span>(sim_seed, node_name.<span class="hljs-title function_ invoke__">as_bytes</span>()).<span class="hljs-title function_ invoke__">next_u64</span>();
 
-        builder.rng_seed(tokio::runtime::RngSeed::from_bytes(
-            &amp;node_seed.to_le_bytes(),
+        builder.<span class="hljs-title function_ invoke__">rng_seed</span>(tokio::runtime::RngSeed::<span class="hljs-title function_ invoke__">from_bytes</span>(
+            &amp;node_seed.<span class="hljs-title function_ invoke__">to_le_bytes</span>(),
         ));
     }
 
-    let _ = (sim_seed, node_name);
+    <span class="hljs-keyword">let</span> <span class="hljs-variable">_</span> = (sim_seed, node_name);
 
     builder
-        .build()
-        .map_err(|e: std::io::Error| Error::Io(e.to_string()))
+        .<span class="hljs-title function_ invoke__">build</span>()
+        .<span class="hljs-title function_ invoke__">map_err</span>(|e: std::io::Error| Error::<span class="hljs-title function_ invoke__">Io</span>(e.<span class="hljs-title function_ invoke__">to_string</span>()))
 }
-</code></pre>
-<ul>
-<li><code>new_current_thread</code> gives the node one executor thread, so Tokio is not racing work across a pool of OS-scheduled workers. </li>
-<li><code>enable_time</code> installs Tokio&#39;s timer driver. </li>
-<li><code>start_paused(true)</code> freezes Tokio&#39;s own clock: <code>tokio::time::Instant::now()</code> no longer advances just because real wall-clock time advanced</li>
-<li><code>rng_seed</code> derives a node-specific seed from the simulation seed and the node name, then passes it into Tokio so runtime-internal randomness, especially default <code>tokio::select!</code> branch ordering, can be replayed.</li>
+</code></pre><ul>
+<li><code>new_current_thread</code> gives the runtime one executor thread. That matters because a multi-threaded runtime reintroduces OS worker scheduling: two ready tasks may run in different orders depending on which worker wakes first.</li>
+<li><code>enable_time</code> installs Tokio&#39;s timer driver.</li>
+<li><code>start_paused(true)</code> freezes Tokio&#39;s own clock. Calls to <code>tokio::time::Instant::now()</code> and timers such as <code>sleep</code>, <code>timeout</code>, and <code>interval</code> now depend on Tokio&#39;s paused clock rather than elapsed wall-clock time.</li>
+<li><code>rng_seed</code> derives a node-specific seed from the simulation seed and the node name, then passes it into Tokio so runtime-internal randomness can be replayed.</li>
 </ul>
 
 <figure class="fig"><div class="dst-mount" id="w-tokio-runtime-1"></div>
@@ -248,133 +290,146 @@ fn replays_forever() {
 <figure class="fig"><div class="dst-mount" id="w-paused-clock-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/paused-clock.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
-<h3 id="how-a-node-tick-advances-time">Advancing a node with a sleep fence</h3>
-<p>Once Tokio time is paused, we can advance a node by awaiting a timer inside that node&#39;s runtime. The core of <code>NodeRuntime::tick</code> is small:</p>
-<pre><code class="language-rust">pub fn tick(&amp;mut self, duration: Duration) -&gt; Result&lt;bool, Error&gt; {
-    if self.crashed || self.finished {
-        return Ok(self.finished);
-    }
-
-    self.tokio.block_on(async {
-        self.local
-            .run_until(async {
-                tokio::time::sleep(duration).await;
-            })
-            .await;
-    });
-
-    // ... then check whether the node task has finished
-}
-</code></pre>
-<p>The <code>sleep(duration)</code> is a fence. <code>LocalSet::run_until</code> keeps the node&#39;s local tasks moving until that fence future completes. Application timers inside the node and the fence timer all register deadlines in the same Tokio time driver.</p>
-<p>DST uses this sleep fence instead of <code>tokio::time::advance(duration)</code> because the fence lets Tokio walk through intermediate deadlines. If a heartbeat is due at <code>+400ms</code> and the fence is at <code>+1s</code>, the heartbeat wakes before the fence resolves. A direct <code>advance(1s)</code> jumps the saved clock in one move and does not wait for every timer it jumped past to run.</p>
-<p>This is also why long simulated waits are cheap. A node can <code>sleep(Duration::from_secs(3600)).await</code> without making the test wait an hour of wall-clock time. The runtime advances paused time to timer deadlines; idle gaps are skipped.</p>
+<h3 id="how-a-node-tick-advances-time">Advancing time with a sleep fence</h3>
+<p>Once Tokio time is paused, the simulator can move a runtime forward by awaiting a timer inside that runtime:</p>
+<pre><code class="hljs language-rust">local
+    .<span class="hljs-title function_ invoke__">run_until</span>(<span class="hljs-keyword">async</span> {
+        tokio::time::<span class="hljs-title function_ invoke__">sleep</span>(tick).<span class="hljs-keyword">await</span>;
+    })
+    .<span class="hljs-keyword">await</span>;
+</code></pre><p>The <code>sleep(tick)</code> is a fence. <code>LocalSet::run_until</code> keeps polling the node&#39;s local tasks until that fence future completes. Application timers inside the node and the fence timer all register deadlines in the same Tokio time driver.</p>
+<p>This is why the simulator uses a sleep fence rather than simply jumping the clock forward. If an application heartbeat is due at <code>+400ms</code> and the fence is due at <code>+1s</code>, Tokio wakes the heartbeat before the fence resolves. A direct clock jump can skip over that shape of execution unless the caller separately drives every intermediate timer.</p>
+<p>This is also why long simulated waits are cheap. A task can <code>sleep(Duration::from_secs(3600)).await</code> without making the test wait an hour of wall-clock time. When the runtime has no runnable work except timers, paused Tokio time can move directly to the next timer deadline.</p>
 <h3 id="the-timer-wheel">What Tokio does while the fence is pending</h3>
 <p>A Tokio sleep is not a busy loop. <code>tokio::time::sleep(duration)</code> computes a deadline from <code>Instant::now() + duration</code> and creates a timer entry. On first poll, that entry is registered with Tokio&#39;s time driver.</p>
 <p>Tokio&#39;s traditional time driver is a hashed timing wheel: six levels, 64 slots per level, one-millisecond precision in the lowest level, and progressively coarser buckets for farther deadlines. The driver tracks the next expiration time. When the current-thread runtime has runnable work, it polls that work. When there is no runnable work left and the remaining work is timer-backed, the runtime parks.</p>
 <p>On an unpaused runtime, parking means waiting on the OS until the next timer is due. On a paused runtime, the parking path checks whether the clock can auto-advance. If it can, Tokio performs a zero-duration park and, if nothing else woke the runtime, advances the paused clock by the time until the next timer. Then the time driver processes expired wheel entries and wakes their tasks.</p>
-<p>So a node tick is this loop with a fence deadline: poll ready work, park, advance to the next timer, wake expired tasks, poll again, and repeat. When the next expired timer is the fence, <code>run_until</code> returns and DST moves to the next node. The wall clock did not move the node forward; Tokio&#39;s saved clock moved because the runtime had reached an idle timer boundary.</p>
+<p>So a node tick is this loop with a fence deadline: poll ready work, park, advance to the next timer, wake expired tasks, poll again, and repeat. When the next expired timer is the fence, <code>run_until</code> returns. The wall clock did not move the node forward; Tokio&#39;s saved clock moved because the runtime reached an idle timer boundary.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-timer-wheel-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/timer-wheel.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
-
-<figure class="fig"><div class="dst-mount" id="w-clock-handoff-1"></div>
-  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/clock-handoff.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
-
-<h3 id="simulation-time-boundary">The simulator&#39;s shared time shows up at the network boundary</h3>
-<p>So far, the story has stayed inside one node. That is the right place to begin because it explains how normal Tokio code progresses. But the simulator also needs one shared coordinate system for things that are not private to a node: packet delivery, link faults, observers, run duration, and OS-clock hooks.</p>
-<p>That shared coordinate is <code>TickContext::elapsed</code>. It is not the value returned by a node&#39;s <code>tokio::time::Instant::now()</code>. It is the harness-level simulation time used by the network and the driver.</p>
-<p>The outer step advances that shared time in <code>tick_step</code>:</p>
-<pre><code class="language-rust">pub(crate) fn tick_step(input: TickInput&lt;&#39;_&gt;) -&gt; Result&lt;TickOutput, Error&gt; {
-    let now = ctx.borrow().elapsed;
-
-    ctx.borrow_mut().network.deliver_due_packets(now);
-
-    let mut running = Vec::new();
-    for (&amp;addr, rt) in runtimes.iter() {
-        if !rt.is_crashed() {
-            running.push(addr);
-        }
-    }
-
-    if ctx.borrow().network.config.random_node_order {
-        running.shuffle(ctx.borrow_mut().network.rng.inner_mut());
-    }
-
-    for &amp;addr in &amp;running {
-        ctx.borrow_mut().active_node = Some(addr);
-        let finished = TickContext::activate(ctx, || rt.tick(sim_tick))?;
-        ctx.borrow_mut().active_node = None;
-
-        // ... track whether clients have finished
-    }
-
-    ctx.borrow_mut().elapsed += sim_tick;
-    *steps += 1;
-
-    #[cfg(all(feature = &quot;os-clock-hooks&quot;, unix))]
-    crate::os_hooks::publish_sim_elapsed(ctx.borrow().elapsed);
-
-    // ... return events and completion state
-}
-</code></pre>
-<p>The order is part of the model. At the beginning of a step, DST delivers every packet whose scheduled delivery time is <code>&lt;= ctx.elapsed</code>. It then chooses the non-crashed nodes to run. By default, that order is <code>IndexMap</code> insertion order. If <code>random_node_order</code> is enabled, the node list is shuffled with the simulation PRNG, so the schedule changes across seeds but replays for a fixed seed.</p>
-
-<figure class="fig"><div class="dst-mount" id="w-step-loop-1"></div>
-  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/step-loop.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
-
-<p>Each node is activated through <code>TickContext::activate</code>, which installs the simulation context in scoped thread-local storage. That is why <code>UdpSocket::bind</code>, <code>UdpSocket::send_to</code>, and the optional clock hooks can tell which node is currently executing. While the node is active, DST calls <code>rt.tick(sim_tick)</code>. Only after every live node has been stepped does the harness advance <code>ctx.elapsed += sim_tick</code>.</p>
-<p>This makes network delivery step-granular. <code>UdpSocket::send_to</code> stamps a packet with the current <code>ctx.elapsed</code>. The network computes <code>deliver_at = now + latency + extra_delay</code>, stores packets in a min-heap keyed by <code>(deliver_at, seq)</code>, and delivers due packets at the start of later steps. A packet sent midway through a node&#39;s Tokio tick is still stamped with the simulation step time, not with a separate intra-node Tokio timestamp.</p>
-<p>At this point it is finally useful to name the split: Tokio time is private to each node runtime; simulation time is the shared clock the harness uses for cross-node effects. They move together by construction during ordinary ticks, but they serve different purposes.</p>
-
-<figure class="fig"><div class="dst-mount" id="w-two-clocks-1"></div>
-  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/two-clocks.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
-
-<h3 id="raw-clock-boundary">The raw-clock boundary</h3>
-<p><code>start_paused(true)</code> controls Tokio APIs: <code>tokio::time::sleep</code>, <code>timeout</code>, <code>interval</code>, and <code>tokio::time::Instant::now()</code>. It does not automatically virtualize every clock read in the process.</p>
-<p>A dependency that calls <code>std::time::Instant::now()</code>, <code>SystemTime::now()</code>, or raw <code>clock_gettime</code> can still reach the host clock. DST&#39;s optional Unix <code>os-clock-hooks</code> close part of that gap by interposing <code>clock_gettime</code> while execution is inside a node context. Those hooks return the published <code>TickContext::elapsed</code> for monotonic clocks and <code>wall_epoch + elapsed</code> for realtime clocks. Outside node context, or without the hooks, raw clock reads fall back to the host.</p>
-<h3 id="tokio-internals">Where Tokio can still choose</h3>
-<p>Paused time removes host time from Tokio timers, but the runtime can still make scheduling choices. DST either eliminates those choices by construction or pins them to the seed.</p>
+<h3 id="tokio-internals">Tokio choices that still need to be pinned down</h3>
+<p>Paused time removes host time from Tokio timers, but Tokio can still make choices. Deterministic replay needs those choices to be either removed by construction or pinned to the seed.</p>
 <p>The first choice is worker scheduling. <code>new_current_thread</code> is a requirement, not a preference. A multi-threaded runtime has worker queues and work stealing; two ready tasks can be polled in different orders depending on which OS worker gets scheduled first. A current-thread runtime has one worker and one local scheduling context, so there is no worker race inside a node.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-work-stealing-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/work-stealing.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
 <p>The second choice is <code>tokio::select!</code>. By default, <code>select!</code> does not always poll branches top-to-bottom. The macro generates a pseudo-random starting branch so a loop does not structurally favor the first branch forever. That is good production fairness and bad replay unless the randomness is controlled.</p>
-<p>DST controls it by deriving a node-specific seed and passing it to Tokio&#39;s <code>Builder::rng_seed</code>.</p>
+<p>The runtime seed closes that gap. DST derives a node-specific seed from the simulation seed and passes it to Tokio&#39;s <code>Builder::rng_seed</code>, making Tokio-level pseudo-random choices replayable for a fixed seed.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-select-seed-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/select-seed.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
-<p>The complete time story is therefore layered, not mysterious: DST steps nodes one at a time; each node advances normal Tokio timers by awaiting a sleep fence; Tokio auto-advances the paused node clock through timer deadlines; the network and faults use the shared <code>TickContext::elapsed</code>; and raw OS clock reads are virtual only when DST&#39;s optional hooks intercept them inside node context.</p>
+<p>This gives us the Tokio half of the story: a node can run ordinary async Rust code, with timers controlled by a paused runtime and Tokio-level scheduling choices pinned down. The next section describes the simulator around those runtimes: the shared driver clock, packet heap, seeded faults, OS hooks, and replay hash.</p>
 
 </section>
 
 <section class="sec">
 <h2 id="dst-project">Anatomy of the framework: four layers over a seed</h2>
-<p>At this point, the idea is simple: take a distributed system full of clocks, packets, retries, random choices, crashes, and task scheduling — and make the whole thing answer to one seed.</p>
-<p>The framework does that by putting four layers between the system under test and the host machine:</p>
+<p>The Tokio section explained how one node can run ordinary async Rust code on paused time. That is only one piece of deterministic simulation.</p>
+<p>A distributed test also needs a shared world around those nodes: one clock for packet delivery, one place where faults are chosen, one network model, and one record of what happened. The framework puts four layers between the system under test and the host machine:</p>
 <ol>
 <li>a <strong>driver</strong> that decides when the world moves forward,</li>
-<li><strong>node runtimes</strong> that make async code run on virtual time,</li>
-<li>a <strong>deterministic network and PRNG</strong> that turn packet timing and loss into seeded choices,</li>
-<li><strong>OS hooks</strong> that catch the clock and entropy reads that libraries perform underneath Tokio.</li>
+<li><strong>node runtimes</strong> that make async code run on paused Tokio time,</li>
+<li>a <strong>deterministic network and PRNG</strong> that turn packet timing, loss, delay, and node order into seeded choices,</li>
+<li><strong>OS hooks</strong> that catch clock and entropy reads that bypass Tokio.</li>
 </ol>
 <p>One seed enters at the top. Every controlled choice flows from it. The result is a run that can be replayed by giving the simulator the same seed again.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-four-layers-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/four-layers.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
-<p>The first layer is the <strong>driver</strong>. It is the heartbeat from earlier in the post: deliver what is due, run the nodes, advance virtual time, record what happened. Nothing moves in the background. A node does not make progress because an OS thread happened to wake up; it makes progress because the driver gave it a tick.</p>
-<p>The second layer is the <strong>node runtime</strong>. Each simulated host or client runs inside its own current-thread Tokio runtime with time paused. That lets ordinary async code keep using <code>tokio::time::sleep</code>, <code>timeout</code>, <code>interval</code>, and heartbeat loops, while the simulator decides when those timers fire. From the application’s point of view, time passes normally. From the test’s point of view, time is just another value derived from the run.</p>
+<h3 id="driver-layer">Layer 1: the driver</h3>
+<p>The first layer is the <strong>driver</strong>. It is the heartbeat from earlier in the post: deliver what is due, run the nodes, advance virtual time, and record what happened. Nothing moves in the background. A node does not make progress because an OS thread happened to wake up; it makes progress because the driver gave it a tick.</p>
+<p>The driver owns the shared simulation time, <code>TickContext::elapsed</code>. This is the clock used for cross-node effects: packet delivery, link faults, observers, run duration, and history recording.</p>
+<p>A step has a fixed shape:</p>
+<pre><code class="hljs language-rust"><span class="hljs-title function_ invoke__">pub</span>(<span class="hljs-keyword">crate</span>) <span class="hljs-keyword">fn</span> <span class="hljs-title function_">tick_step</span>(input: TickInput&lt;<span class="hljs-symbol">&#x27;_</span>&gt;) <span class="hljs-punctuation">-&gt;</span> <span class="hljs-type">Result</span>&lt;TickOutput, Error&gt; {
+    <span class="hljs-keyword">let</span> <span class="hljs-variable">now</span> = ctx.<span class="hljs-title function_ invoke__">borrow</span>().elapsed;
+
+    ctx.<span class="hljs-title function_ invoke__">borrow_mut</span>().network.<span class="hljs-title function_ invoke__">deliver_due_packets</span>(now);
+
+    <span class="hljs-keyword">let</span> <span class="hljs-keyword">mut </span><span class="hljs-variable">running</span> = <span class="hljs-type">Vec</span>::<span class="hljs-title function_ invoke__">new</span>();
+    <span class="hljs-keyword">for</span> (&amp;addr, rt) <span class="hljs-keyword">in</span> runtimes.<span class="hljs-title function_ invoke__">iter</span>() {
+        <span class="hljs-keyword">if</span> !rt.<span class="hljs-title function_ invoke__">is_crashed</span>() {
+            running.<span class="hljs-title function_ invoke__">push</span>(addr);
+        }
+    }
+
+    <span class="hljs-keyword">if</span> ctx.<span class="hljs-title function_ invoke__">borrow</span>().network.config.random_node_order {
+        running.<span class="hljs-title function_ invoke__">shuffle</span>(ctx.<span class="hljs-title function_ invoke__">borrow_mut</span>().network.rng.<span class="hljs-title function_ invoke__">inner_mut</span>());
+    }
+
+    <span class="hljs-keyword">for</span> &amp;addr <span class="hljs-keyword">in</span> &amp;running {
+        ctx.<span class="hljs-title function_ invoke__">borrow_mut</span>().active_node = <span class="hljs-title function_ invoke__">Some</span>(addr);
+        <span class="hljs-keyword">let</span> <span class="hljs-variable">finished</span> = TickContext::<span class="hljs-title function_ invoke__">activate</span>(ctx, || rt.<span class="hljs-title function_ invoke__">tick</span>(sim_tick))?;
+        ctx.<span class="hljs-title function_ invoke__">borrow_mut</span>().active_node = <span class="hljs-literal">None</span>;
+
+        <span class="hljs-comment">// ... track whether clients have finished</span>
+    }
+
+    ctx.<span class="hljs-title function_ invoke__">borrow_mut</span>().elapsed += sim_tick;
+    *steps += <span class="hljs-number">1</span>;
+
+    <span class="hljs-meta">#[cfg(all(feature = <span class="hljs-string">&quot;os-clock-hooks&quot;</span>, unix))]</span>
+    crate::os_hooks::<span class="hljs-title function_ invoke__">publish_sim_elapsed</span>(ctx.<span class="hljs-title function_ invoke__">borrow</span>().elapsed);
+
+    <span class="hljs-comment">// ... return events and completion state</span>
+}
+</code></pre><p>The order is part of the model. At the beginning of a step, DST delivers every packet whose scheduled delivery time is <code>&lt;= ctx.elapsed</code>. It then chooses the non-crashed nodes to run. By default, that order is <code>IndexMap</code> insertion order. If <code>random_node_order</code> is enabled, the node list is shuffled with the simulation PRNG, so the schedule changes across seeds but replays for a fixed seed.</p>
+
+<figure class="fig"><div class="dst-mount" id="w-step-loop-1"></div>
+  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/step-loop.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
+
+<p>Only after every live node has been stepped does the harness advance <code>ctx.elapsed += sim_tick</code>. That keeps cross-node effects step-granular and replayable: packets, faults, observers, and history recording all share the same simulation coordinate system.</p>
+<h3 id="node-runtime-layer">Layer 2: node runtimes</h3>
+<p>The second layer is the <strong>node runtime</strong>. Each simulated host or client runs inside its own current-thread Tokio runtime with time paused. That lets ordinary async code keep using <code>tokio::time::sleep</code>, <code>timeout</code>, <code>interval</code>, and heartbeat loops, while the simulator decides when those timers fire.</p>
+<p>The driver advances a node by activating it and calling <code>NodeRuntime::tick</code>:</p>
+<pre><code class="hljs language-rust"><span class="hljs-keyword">pub</span> <span class="hljs-keyword">fn</span> <span class="hljs-title function_">tick</span>(&amp;<span class="hljs-keyword">mut</span> <span class="hljs-keyword">self</span>, duration: Duration) <span class="hljs-punctuation">-&gt;</span> <span class="hljs-type">Result</span>&lt;<span class="hljs-type">bool</span>, Error&gt; {
+    <span class="hljs-keyword">if</span> <span class="hljs-keyword">self</span>.crashed || <span class="hljs-keyword">self</span>.finished {
+        <span class="hljs-keyword">return</span> <span class="hljs-title function_ invoke__">Ok</span>(<span class="hljs-keyword">self</span>.finished);
+    }
+
+    <span class="hljs-keyword">self</span>.tokio.<span class="hljs-title function_ invoke__">block_on</span>(<span class="hljs-keyword">async</span> {
+        <span class="hljs-keyword">self</span>.local
+            .<span class="hljs-title function_ invoke__">run_until</span>(<span class="hljs-keyword">async</span> {
+                tokio::time::<span class="hljs-title function_ invoke__">sleep</span>(duration).<span class="hljs-keyword">await</span>;
+            })
+            .<span class="hljs-keyword">await</span>;
+    });
+
+    <span class="hljs-comment">// ... then check whether the node task has finished</span>
+}
+</code></pre><p>Each node is activated through <code>TickContext::activate</code>, which installs the simulation context in scoped thread-local storage. That is how APIs such as <code>UdpSocket::bind</code>, <code>UdpSocket::send_to</code>, and the optional clock hooks can tell which node is currently executing.</p>
+
+<figure class="fig"><div class="dst-mount" id="w-clock-handoff-1"></div>
+  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/clock-handoff.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
+
+<p>This is where it is useful to name the split between the two clocks.</p>
+<p>Tokio time is private to each node runtime. It drives that node&#39;s sleeps, intervals, timeouts, and heartbeat tasks.</p>
+<p>Simulation time is shared by the harness. It drives packet delivery, fault timing, observers, OS-clock hooks, and the global run budget.</p>
+<p>During ordinary ticks, the driver advances them together: each node is allowed to make <code>sim_tick</code> worth of Tokio-time progress, and then the shared <code>TickContext::elapsed</code> advances by the same amount. They move together by construction, but they serve different purposes.</p>
+
+<figure class="fig"><div class="dst-mount" id="w-two-clocks-1"></div>
+  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/two-clocks.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
+
+<h3 id="network-layer">Layer 3: deterministic network and PRNG</h3>
 <p>The third layer is the <strong>deterministic substrate</strong>: the seeded PRNG plus the simulated network. This is where the seed becomes visible as behavior. Should a packet be delayed? How long should the delay be? Should this link drop traffic? If several packets become deliverable at the same virtual instant, which one arrives first? In a real deployment, the kernel and network decide those things. In the simulator, the seeded model decides them.</p>
+<p>When application code sends a packet, it does not go to the operating system. The socket implementation looks at the active node context and hands the packet to the simulated network. A send is stamped with the current shared simulation time:</p>
+<pre><code class="hljs language-rust"><span class="hljs-keyword">let</span> <span class="hljs-variable">now</span> = ctx.elapsed;
+<span class="hljs-keyword">let</span> <span class="hljs-variable">deliver_at</span> = now + latency + extra_delay;
+</code></pre><p>The packet is stored in a min-heap keyed by <code>(deliver_at, seq)</code>. The delivery time decides when the packet becomes visible. The sequence number breaks ties, so packets due at the same instant still have a deterministic order. At the start of each driver step, <code>deliver_due_packets(ctx.elapsed)</code> moves every due packet into the receiver&#39;s inbox.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-packet-heap-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/packet-heap.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
-<p>The packet heap is the important visual here. Instead of sending bytes to a real socket, the simulator schedules packets for future virtual times. A packet sits in the heap until its delivery time arrives. When the driver reaches that time, the packet is moved into the receiver’s inbox.</p>
+<p>The packet heap is the important visual here. Instead of sending bytes to a real socket, the simulator schedules packets for future virtual times. A packet sits in the heap until its delivery time arrives. When the driver reaches that time, the packet is moved into the receiver&#39;s inbox.</p>
 <p>That one substitution changes the meaning of the network. Packet delivery is no longer “whatever the OS and NIC happened to do.” It is an ordered, replayable part of the test. Same seed, same delays, same delivery order.</p>
+
+<figure class="fig"><div class="dst-mount" id="w-packet-admission-1"></div>
+  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/packet-admission.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
+
 <p>Faults are layered on top of the same network model. The key distinction is between <strong>dropping</strong> and <strong>holding</strong> traffic.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-partition-hold-1"></div>
@@ -382,16 +437,17 @@ fn replays_forever() {
 
 <p>A partition is a cut wire: traffic across that link is discarded. A hold is a clogged pipe: traffic stops moving, but the packets are kept and may be released later. Those two failures look similar from far away, but they test different protocol behavior. A system that survives dropped messages has not necessarily survived delayed messages arriving all at once after recovery.</p>
 <p>That is why the framework exposes both. A partition asks, “Can the system tolerate loss?” A hold asks, “Can the system tolerate time, backlog, and reordering pressure?”</p>
-
-<figure class="fig"><div class="dst-mount" id="w-packet-admission-1"></div>
-  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/packet-admission.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
-
-<p>The fourth layer is <strong>OS interposition</strong>. Tokio’s paused clock handles code that uses Tokio time, but real systems often depend on libraries that call lower-level APIs directly: <code>clock_gettime</code>, <code>SystemTime</code>, <code>getrandom</code>, or platform entropy functions. Those reads bypass the simulator unless they are intercepted.</p>
+<p>The same seeded PRNG drives these choices. Change the seed and the simulator explores a different execution. Keep the seed and it replays the same network behavior, node order, and fault sequence.</p>
+<h3 id="os-hooks-layer">Layer 4: OS interposition</h3>
+<p>The fourth layer is <strong>OS interposition</strong>. Tokio&#39;s paused clock handles code that uses Tokio time: <code>tokio::time::sleep</code>, <code>timeout</code>, <code>interval</code>, and <code>tokio::time::Instant::now()</code>.</p>
+<p>It does not automatically virtualize every clock or entropy read in the process. A dependency that calls <code>std::time::Instant::now()</code>, <code>SystemTime::now()</code>, raw <code>clock_gettime</code>, <code>getrandom</code>, or another platform entropy source can still reach the host.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-os-hooks-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/os-hooks.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
-<p>The OS hooks are the escape hatch for that. When enabled, clock reads made inside simulated node execution return simulation time instead of host time, and entropy reads can be served from a seeded generator instead of the operating system. This is not magic, and it is not a replacement for designing deterministic code, but it closes an important class of leaks from dependencies that were never written with simulation in mind.</p>
+<p>The optional OS hooks close part of that gap. While execution is inside an active node context, clock reads can return simulation time instead of host time, and entropy reads can be served from a seeded generator instead of the operating system. For monotonic clocks, the hook returns the published <code>TickContext::elapsed</code>. For realtime clocks, it can return <code>wall_epoch + elapsed</code>. Outside node context, or without the hooks enabled, those calls fall back to host behavior.</p>
+<p>This is not magic, and it is not a replacement for designing deterministic code, but it closes an important class of leaks from dependencies that were never written with simulation in mind.</p>
+<h3 id="history-hash">The receipt: history hash</h3>
 <p>The final piece is not another layer; it is the receipt. Every meaningful event — packet delivered, packet dropped, node crashed, link repaired — is recorded into a history hash. The hash is not there to explain the bug by itself. It is there to prove that a replay really walked the same path.</p>
 <blockquote>
 <p>Same seed. Same schedule. Same faults. Same fingerprint.</p>
@@ -401,19 +457,18 @@ fn replays_forever() {
 </section>
 
 <section class="sec">
-<h2 id="testing-tapir">Using it to test our Distributed KV Store</h2>
+<h2 id="testing-ds">Using it to test our Distributed KV Store</h2>
 <p>A deterministic simulator is only useful if the system under test can be placed inside it without rewriting the system.</p>
 <p>That starts with a design choice that is worth making even before DST exists: the core code should talk to the outside world through interfaces. Networking, storage, time, randomness, and background execution should sit behind seams that can be swapped. In production, those seams point at the real implementation. In tests, they can point at a controlled one.</p>
-<p>That is what made the TAPIR simulation practical. The replica code did not need a separate &quot;simulation version&quot;. It already sent messages through a transport boundary, so the simulator only had to replace the transport underneath it.</p>
+<p>That is what made the simulation practical. The replica code did not need a separate &quot;simulation version&quot;. It already sent messages through a transport boundary, so the simulator only had to replace the transport underneath it.</p>
 <h3 id="transport-seam">The seam: swap the world, not the protocol</h3>
 <p>The production system sends bytes through a real network transport. In the simulator, the same shape of interface is backed by the DST network instead:</p>
-<pre><code class="language-rust">#[async_trait::async_trait]
-trait Transport {
-    async fn send(&amp;self, to: &amp;SocketAddr, raw: &amp;[u8], priority: i32) -&gt; Result&lt;()&gt;;
-    fn shutdown(&amp;self);
+<pre><code class="hljs language-rust"><span class="hljs-meta">#[async_trait::async_trait]</span>
+<span class="hljs-keyword">trait</span> <span class="hljs-title class_">Transport</span> {
+    <span class="hljs-keyword">async</span> <span class="hljs-keyword">fn</span> <span class="hljs-title function_">send</span>(&amp;<span class="hljs-keyword">self</span>, to: &amp;SocketAddr, raw: &amp;[<span class="hljs-type">u8</span>], priority: <span class="hljs-type">i32</span>) <span class="hljs-punctuation">-&gt;</span> <span class="hljs-type">Result</span>&lt;()&gt;;
+    <span class="hljs-keyword">fn</span> <span class="hljs-title function_">shutdown</span>(&amp;<span class="hljs-keyword">self</span>);
 }
-</code></pre>
-<p>The protocol still calls <code>send</code>. The replica still believes it is talking to another node. The difference is that delivery is no longer owned by the kernel. It is owned by the simulator.</p>
+</code></pre><p>The protocol still calls <code>send</code>. The replica still believes it is talking to another node. The difference is that delivery is no longer owned by the kernel. It is owned by the simulator.</p>
 <p>That one substitution is the important trick. Latency, packet order, partitions, drops, crashes, and restarts now come from the seed instead of from the host machine.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-transport-swap-1"></div>
@@ -427,7 +482,7 @@ trait Transport {
 <li>the seed owns the choices.</li>
 </ul>
 <p>Once those boundaries exist, the test cluster becomes a small in-process deployment. The harness starts a few replica hosts, starts one or more clients, and lets the simulator drive the world forward. A test can then read almost like an integration test: bring up nodes, issue a transaction, crash or partition something, and assert what must still be true.</p>
-<h3 id="tapir-concrete-tests">Start with concrete tests</h3>
+<h3 id="ds-concrete-tests">Start with concrete tests</h3>
 <p>The first useful tests do not need to explain the whole protocol. They should ask small, concrete questions:</p>
 <ul>
 <li>can a transaction commit when all replicas are up?</li>
@@ -436,47 +491,45 @@ trait Transport {
 </ul>
 <p>Those are good DST tests because each one has a seed. If the unlucky timing exposes a bug, that timing is no longer lost. The seed is the address of the run.</p>
 
-<figure class="fig"><div class="dst-mount" id="w-tapir-commit-1"></div>
-  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/tapir-commit.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
+<figure class="fig"><div class="dst-mount" id="w-ds-commit-1"></div>
+  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/ds-commit.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
 <p>The tests can stay readable because the complicated part is outside the test body. The harness owns cluster construction, node startup, simulated transport, and clock setup. The test owns only the scenario it wants to exercise.</p>
-<pre><code class="language-rust">run_dst(seed, |sim| {
-    let cluster = build_test_cluster(3);
+<pre><code class="hljs language-rust"><span class="hljs-title function_ invoke__">run_dst</span>(seed, |sim| {
+    <span class="hljs-keyword">let</span> <span class="hljs-variable">cluster</span> = <span class="hljs-title function_ invoke__">build_test_cluster</span>(<span class="hljs-number">3</span>);
 
-    sim.client(&quot;node-0&quot;, async move {
-        let tx = cluster.begin().await?;
-        tx.set(&quot;hello&quot;, 42).await?;
-        tx.commit().await?;
-        Ok(())
+    sim.<span class="hljs-title function_ invoke__">client</span>(<span class="hljs-string">&quot;node-0&quot;</span>, <span class="hljs-keyword">async</span> <span class="hljs-keyword">move</span> {
+        <span class="hljs-keyword">let</span> <span class="hljs-variable">tx</span> = cluster.<span class="hljs-title function_ invoke__">begin</span>().<span class="hljs-keyword">await</span>?;
+        tx.<span class="hljs-title function_ invoke__">set</span>(<span class="hljs-string">&quot;hello&quot;</span>, <span class="hljs-number">42</span>).<span class="hljs-keyword">await</span>?;
+        tx.<span class="hljs-title function_ invoke__">commit</span>().<span class="hljs-keyword">await</span>?;
+        <span class="hljs-title function_ invoke__">Ok</span>(())
     });
 
-    cluster.register_replica_hosts(sim);
+    cluster.<span class="hljs-title function_ invoke__">register_replica_hosts</span>(sim);
 });
-</code></pre>
-<p>The exact helper names are not the point. The point is the shape: production code runs inside a deterministic world, and the test describes only the behavior it cares about.</p>
+</code></pre><p>The exact helper names are not the point. The point is the shape: production code runs inside a deterministic world, and the test describes only the behavior it cares about.</p>
 
 <figure class="fig"><div class="dst-mount" id="w-host-client-lifetime-1"></div>
   <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/host-client-lifetime.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
 
-<h3 id="tapir-scenarios">Then let the seed choose the details</h3>
+<h3 id="ds-scenarios">Then let the seed choose the details</h3>
 <p>Hand-written scripts are good regressions. They are not enough for exploration. Once the basic seams work, the next step is to describe a kind of world rather than a fixed timestamp-by-timestamp script.</p>
 <p>A small scenario struct is enough:</p>
-<pre><code class="language-rust">struct Scenario {
+<pre><code class="hljs language-rust"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Scenario</span> {
     profile: FaultProfile,
     budget: Duration,
-    invariants: Vec&lt;Invariant&gt;,
+    invariants: <span class="hljs-type">Vec</span>&lt;Invariant&gt;,
 }
 
-struct FaultProfile {
-    crash_per_tick: f64,
-    bounce_per_tick: f64,
-    partition_toggle_per_tick: f64,
-    tx_per_tick: f64,
-    key_space: u32,
-    client_crash_per_tick: f64,
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">FaultProfile</span> {
+    crash_per_tick: <span class="hljs-type">f64</span>,
+    bounce_per_tick: <span class="hljs-type">f64</span>,
+    partition_toggle_per_tick: <span class="hljs-type">f64</span>,
+    tx_per_tick: <span class="hljs-type">f64</span>,
+    key_space: <span class="hljs-type">u32</span>,
+    client_crash_per_tick: <span class="hljs-type">f64</span>,
 }
-</code></pre>
-<p>The profile says what kind of pressure to apply: crashes, restarts, partitions, transaction load, contention, or client failures. The seed decides the exact nodes, links, transactions, and ticks.</p>
+</code></pre><p>The profile says what kind of pressure to apply: crashes, restarts, partitions, transaction load, contention, or client failures. The seed decides the exact nodes, links, transactions, and ticks.</p>
 <p>That keeps the blog-level story simple:</p>
 <blockquote>
 <p>same seed + same scenario = same fault sequence.</p>
@@ -493,7 +546,7 @@ struct FaultProfile {
 <li>kill a client mid-transaction, then check that the system can still settle.</li>
 </ul>
 <p>The simulator is the adversary. The seed is how we replay the adversary.</p>
-<h3 id="tapir-invariants">What to assert: safety first, liveness with a budget</h3>
+<h3 id="ds-invariants">What to assert: safety first, liveness with a budget</h3>
 <p>Faults only create pressure. Invariants decide whether the system survived it.</p>
 <p>The clean split is safety versus liveness.</p>
 
@@ -506,19 +559,22 @@ struct FaultProfile {
 <figure class="fig fig-dgm"><svg class="dgm-svg" viewBox="0 0 720 150" xmlns="http://www.w3.org/2000/svg"><defs><marker id="m-green" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#16a34a"/></marker><marker id="m-blue" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#2563eb"/></marker><marker id="m-purple" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#7c3aed"/></marker><marker id="m-amber" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#d97706"/></marker><marker id="m-red" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#dc2626"/></marker><marker id="m-pink" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#db2777"/></marker><marker id="m-gray" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#64748b"/></marker></defs><rect x="20" y="36" width="190" height="78" rx="9" fill="#16a34a20" stroke="#16a34a" stroke-width="1.6"/><text x="115" y="56" text-anchor="middle" font-size="13" font-weight="700" fill="#16a34a">Healthy 3/3</text><text x="115" y="74" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">all reachable,</text><text x="115" y="89" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">committing</text><rect x="265" y="36" width="190" height="78" rx="9" fill="#dc262620" stroke="#dc2626" stroke-width="1.6"/><text x="360" y="56" text-anchor="middle" font-size="13" font-weight="700" fill="#dc2626">Split</text><text x="360" y="74" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">{n0,n2} keep quorum;</text><text x="360" y="89" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">n1 isolated</text><rect x="510" y="36" width="190" height="78" rx="9" fill="#16a34a20" stroke="#16a34a" stroke-width="1.6"/><text x="605" y="56" text-anchor="middle" font-size="13" font-weight="700" fill="#16a34a">Healed</text><text x="605" y="74" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">n1 catches up;</text><text x="605" y="89" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">3/3 agree again</text><line x1="210" y1="75" x2="263" y2="75" stroke="#dc2626" stroke-width="1.8" marker-end="url(#m-red)"/><line x1="455" y1="75" x2="508" y2="75" stroke="#16a34a" stroke-width="1.8" marker-end="url(#m-green)"/><text x="237" y="66" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.65">partition</text><text x="482" y="66" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.65">repair</text></svg><figcaption>Quorum convergence across a partition</figcaption></figure>
 
 <p>At the blog level, the assertions can stay plain:</p>
-<pre><code class="language-rust">enum Invariant {
+<pre><code class="hljs language-rust"><span class="hljs-keyword">enum</span> <span class="hljs-title class_">Invariant</span> {
     CommittedNeverRegresses,
     AllLiveNodesRecover,
     ConnectedNodesAgree,
-    AtLeastNCommits { min: u32 },
+    AtLeastNCommits { min: <span class="hljs-type">u32</span> },
 }
-</code></pre>
-<p>This is enough detail for the reader. We do not need to walk through every internal message or recovery path. The important idea is that DST separates the pressure from the judgment: the fault profile creates possible executions, and the invariants define what must hold across all of them.</p>
-<h3 id="tapir-replay">Replay is the payoff</h3>
-<p>When a run fails, the debugging loop is simple:</p>
-<pre><code class="language-bash">DST_SEED=&lt;failing-seed&gt; cargo test &lt;test-name&gt;
-</code></pre>
-<p>That is the point of using DST here. The simulator is not a separate model of our KV store TAPIR. It is the same core code placed behind replaceable interfaces, driven by virtual time, a simulated network, seeded faults, and replayable invariants.</p>
+</code></pre><p>This is enough detail for the reader. We do not need to walk through every internal message or recovery path. The important idea is that DST separates the pressure from the judgment: the fault profile creates possible executions, and the invariants define what must hold across all of them.</p>
+<h3 id="ds-replay">Replay is the payoff</h3>
+<p>When a run fails, the debugging loop should be boring:</p>
+<pre><code class="hljs language-bash">DST_SEED=&lt;failing-seed&gt; cargo <span class="hljs-built_in">test</span> &lt;test-name&gt;
+</code></pre><p>The same seed reconstructs the same world: the same packet delays, the same node crashes, the same timer deadlines, the same partitions, and the same assertion failure.</p>
+
+<figure class="fig"><div class="dst-mount" id="w-same-seed-replay-2"></div>
+  <figcaption>Interactive — step, play, scrub the seed. <a href="../widgets/same-seed-replay.html" target="_blank" rel="noopener">open standalone ↗</a></figcaption></figure>
+
+<p>That is the point of using DST here. The simulator is not a separate model of the algorithm. It is the same core code placed behind replaceable interfaces, driven by virtual time, a simulated network, seeded faults, and replayable invariants.</p>
 <blockquote>
 <p>The protocol stays the protocol. The world around it becomes deterministic.</p>
 </blockquote>
@@ -559,18 +615,13 @@ struct FaultProfile {
 <li><a href="https://tokio.rs/tokio/topics/testing">Tokio: Testing</a> — official guidance on testing async code, including time control with the paused clock.</li>
 <li><a href="https://github.com/madsim-rs/madsim">madsim-rs/madsim</a> — a deterministic async runtime that intercepts time, randomness, and networking to make Tokio-based systems fully reproducible.</li>
 </ul>
-<p><strong>TAPIR &amp; Viewstamped Replication</strong></p>
-<ul>
-<li><a href="https://dl.acm.org/doi/10.1145/3269981">Zhang et al., &quot;Building Consistent Transactions with Inconsistent Replication&quot; (ACM TOCS, 2018)</a> — the TAPIR paper: strong transactional consistency built atop a deliberately inconsistent replication layer.</li>
-<li><a href="http://pmg.csail.mit.edu/papers/vr.pdf">Oki &amp; Liskov, &quot;Viewstamped Replication&quot; (PODC 1988)</a> — the original VR paper introducing view changes and viewstamps for highly-available primary-copy replication.</li>
-<li><a href="http://pmg.csail.mit.edu/papers/vr-revisited.pdf">Liskov &amp; Cowling, &quot;Viewstamped Replication Revisited&quot; (MIT, 2012)</a> — the modern restatement of VR that most contemporary implementations (including TigerBeetle) follow.</li>
-</ul>
 
 </section>
 </article></div>
 <script src="../assets/vendor/anime.min.js"></script>
 <script src="../assets/js/dst/dst-kit.js"></script>
 <script src="../assets/js/dst/clock-handoff.js"></script>
+<script src="../assets/js/dst/ds-commit.js"></script>
 <script src="../assets/js/dst/four-layers.js"></script>
 <script src="../assets/js/dst/host-client-lifetime.js"></script>
 <script src="../assets/js/dst/os-hooks.js"></script>
@@ -584,7 +635,6 @@ struct FaultProfile {
 <script src="../assets/js/dst/select-seed.js"></script>
 <script src="../assets/js/dst/sim-cluster.js"></script>
 <script src="../assets/js/dst/step-loop.js"></script>
-<script src="../assets/js/dst/tapir-commit.js"></script>
 <script src="../assets/js/dst/tick-loop.js"></script>
 <script src="../assets/js/dst/timer-wheel.js"></script>
 <script src="../assets/js/dst/tokio-runtime.js"></script>
@@ -600,20 +650,21 @@ struct FaultProfile {
     try { if(window.DSTTokioRuntime) DSTTokioRuntime.init('w-tokio-runtime-1'); } catch (e) { console.error('tokio-runtime (w-tokio-runtime-1) failed:', e); }
     try { if(window.DSTPausedClock) DSTPausedClock.init('w-paused-clock-1'); } catch (e) { console.error('paused-clock (w-paused-clock-1) failed:', e); }
     try { if(window.DSTTimerWheel) DSTTimerWheel.init('w-timer-wheel-1'); } catch (e) { console.error('timer-wheel (w-timer-wheel-1) failed:', e); }
-    try { if(window.DSTClockHandoff) DSTClockHandoff.init('w-clock-handoff-1'); } catch (e) { console.error('clock-handoff (w-clock-handoff-1) failed:', e); }
-    try { if(window.DSTStepLoop) DSTStepLoop.init('w-step-loop-1'); } catch (e) { console.error('step-loop (w-step-loop-1) failed:', e); }
-    try { if(window.DSTTwoClocks) DSTTwoClocks.init('w-two-clocks-1'); } catch (e) { console.error('two-clocks (w-two-clocks-1) failed:', e); }
     try { if(window.DSTWorkStealing) DSTWorkStealing.init('w-work-stealing-1'); } catch (e) { console.error('work-stealing (w-work-stealing-1) failed:', e); }
     try { if(window.DSTSelectSeed) DSTSelectSeed.init('w-select-seed-1'); } catch (e) { console.error('select-seed (w-select-seed-1) failed:', e); }
     try { if(window.DSTFourLayers) DSTFourLayers.init('w-four-layers-1'); } catch (e) { console.error('four-layers (w-four-layers-1) failed:', e); }
+    try { if(window.DSTStepLoop) DSTStepLoop.init('w-step-loop-1'); } catch (e) { console.error('step-loop (w-step-loop-1) failed:', e); }
+    try { if(window.DSTClockHandoff) DSTClockHandoff.init('w-clock-handoff-1'); } catch (e) { console.error('clock-handoff (w-clock-handoff-1) failed:', e); }
+    try { if(window.DSTTwoClocks) DSTTwoClocks.init('w-two-clocks-1'); } catch (e) { console.error('two-clocks (w-two-clocks-1) failed:', e); }
     try { if(window.DSTPacketHeap) DSTPacketHeap.init('w-packet-heap-1'); } catch (e) { console.error('packet-heap (w-packet-heap-1) failed:', e); }
-    try { if(window.DSTPartitionHold) DSTPartitionHold.init('w-partition-hold-1'); } catch (e) { console.error('partition-hold (w-partition-hold-1) failed:', e); }
     try { if(window.DSTPacketAdmission) DSTPacketAdmission.init('w-packet-admission-1'); } catch (e) { console.error('packet-admission (w-packet-admission-1) failed:', e); }
+    try { if(window.DSTPartitionHold) DSTPartitionHold.init('w-partition-hold-1'); } catch (e) { console.error('partition-hold (w-partition-hold-1) failed:', e); }
     try { if(window.DSTOsHooks) DSTOsHooks.init('w-os-hooks-1'); } catch (e) { console.error('os-hooks (w-os-hooks-1) failed:', e); }
     try { if(window.DSTTransportSwap) DSTTransportSwap.init('w-transport-swap-1'); } catch (e) { console.error('transport-swap (w-transport-swap-1) failed:', e); }
-    try { if(window.DSTTapirCommit) DSTTapirCommit.init('w-tapir-commit-1'); } catch (e) { console.error('tapir-commit (w-tapir-commit-1) failed:', e); }
+    try { if(window.DSTCommit) DSTCommit.init('w-ds-commit-1'); } catch (e) { console.error('ds-commit (w-ds-commit-1) failed:', e); }
     try { if(window.DSTHostClientLifetime) DSTHostClientLifetime.init('w-host-client-lifetime-1'); } catch (e) { console.error('host-client-lifetime (w-host-client-lifetime-1) failed:', e); }
     try { if(window.DSTRollingClog) DSTRollingClog.init('w-rolling-clog-1'); } catch (e) { console.error('rolling-clog (w-rolling-clog-1) failed:', e); }
+    try { if(window.DSTSameSeedReplay) DSTSameSeedReplay.init('w-same-seed-replay-2'); } catch (e) { console.error('same-seed-replay (w-same-seed-replay-2) failed:', e); }
   });
   document.getElementById('theme').addEventListener('click',function(){var h=document.documentElement;h.setAttribute('data-mode',h.getAttribute('data-mode')==='dark'?'light':'dark');});
 </script>

@@ -97,8 +97,7 @@
         viewBox: `0 0 ${W} ${H}`,
         uid,
         stats: [
-          { id: 'fpa', label: 'run A fingerprint' },
-          { id: 'fpb', label: 'run B fingerprint' },
+          { id: 'folded', label: 'events folded' },
           { id: 'verdict', label: 'A vs B' },
         ],
         cap: 'Two runs of the same simulator. Each chip is one event; folding it into the running '
@@ -163,8 +162,8 @@
         fill: c[zone], 'font-size': 10, 'font-weight': 700 }, content)
         .textContent = 'seed ' + r.seed;
 
-      // Caption above the chip row.
-      K.el('text', { x: CHIP.x0, y: y + 28, fill: c.muted, 'font-size': 9.5 }, content)
+      // Caption above the chip row (offset right so it clears the seed tag at x 106–176).
+      K.el('text', { x: CHIP.x0 + 44, y: y + 28, fill: c.muted, 'font-size': 9.5 }, content)
         .textContent = 'events, in order →';
 
       // Event chips (one row). Start grey; light up as each event folds in.
@@ -234,10 +233,10 @@
         }
       }
 
-      // Stat cards.
-      stat('fpa', h0.slice(0, 8));
-      stat('fpb', h1.slice(0, 8));
-      stat('verdict', !st.done ? '—' : (same ? 'MATCH' : 'DIVERGED'));
+      // Stat cards (the full fingerprints are shown big in the run rows — keep these short so they
+      // never overflow their card).
+      stat('folded', st.runs[0].step + '/' + STEPS);
+      stat('verdict', !st.done ? '—' : (same ? 'MATCH' : 'DIFFER'));
 
       // Repro line tracks run B's seed.
       const repro = svg.querySelector('#' + CSS.escape(uid + '-repro'));

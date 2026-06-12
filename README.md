@@ -8,7 +8,7 @@ is *Learning DST for testing our distributed transactional KV store*, a determin
 ## Quick start
 
 ```bash
-npm install                                   # once — installs `marked`
+npm install                                   # once — installs `marked` + `marked-highlight` + `highlight.js`
 npm run build                                 # build all posts → posts/, widgets/, index.html
 python3 -m http.server 8000 --bind 127.0.0.1  # serve it
 # open http://127.0.0.1:8000/

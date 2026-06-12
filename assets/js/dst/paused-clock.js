@@ -142,7 +142,7 @@ sleep(Duration::from_secs(1)).await;             // 0 real microseconds`;
       E('nbox').setAttribute('stroke', c.purple);
       E('ntag').textContent = 'FROZEN';
       E('nsub').textContent = 'moves only on Step';
-      if (amount >= 1000) leapBanner('⏭ idle gap skipped: now() leapt +' + (amount / 1000) + ' s in 0 real time');
+      if (amount >= 1000) leapBanner('⏭ leapt +' + (amount / 1000) + ' s · idle gap skipped, 0 real time');
       K.addLog(logBody, label, amount >= 1000 ? 'hl' : null);
       st.busy = false; setLock(false);
     }
@@ -164,10 +164,11 @@ sleep(Duration::from_secs(1)).await;             // 0 real microseconds`;
     }
     function leapBanner(msg) {
       const old = content.querySelector('#' + CSS.escape(uid + '-leap')); if (old) old.remove();
-      const bw = 400, bh = 28, bx = NODE.x + (NODE.w - bw) / 2, by = NODE.y - 2;
+      // sits INSIDE the node box (392..766) so it never runs off the right edge or over the header
+      const bw = 350, bh = 28, bx = NODE.x + (NODE.w - bw) / 2, by = NODE.y + 46;
       const g = K.el('g', { id: uid + '-leap', opacity: 0 }, content);
-      K.el('rect', { x: Math.max(8, bx), y: by, width: bw, height: bh, rx: 8, fill: K.grad(uid, 'amber'), stroke: c.amber, 'stroke-width': 1.8, filter: K.glow(uid) }, g);
-      K.el('text', { x: Math.max(8, bx) + bw / 2, y: by + 19, 'text-anchor': 'middle', fill: c.amber, 'font-size': 12, 'font-weight': 700 }, g).textContent = msg;
+      K.el('rect', { x: bx, y: by, width: bw, height: bh, rx: 8, fill: K.grad(uid, 'amber'), stroke: c.amber, 'stroke-width': 1.8, filter: K.glow(uid) }, g);
+      K.el('text', { x: bx + bw / 2, y: by + 19, 'text-anchor': 'middle', fill: c.amber, 'font-size': 11, 'font-weight': 700 }, g).textContent = msg;
       animate(g, { opacity: [0, 1], duration: dur(200), ease: 'out(2)' });
       animate(g, { opacity: [1, 0], delay: dur(1300), duration: dur(650), ease: 'in(2)', onComplete: () => g.remove() });
     }

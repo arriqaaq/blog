@@ -7,6 +7,8 @@
     "build": "node build/build.js"
   },
   "dependencies": {
-    "marked": "^12.0.0"
+    "highlight.js": "^11.11.1",
+    "marked": "^12.0.0",
+    "marked-highlight": "^2.2.4"
   }
 }
