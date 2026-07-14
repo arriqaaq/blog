@@ -1,20 +1,47 @@
 <!doctype html>
 <html lang="en" data-mode="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>arriqaaq</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet"><style>
-  :root{color-scheme:light dark}html[data-mode=dark]{background:#14151a;color:#e6e8ec}html[data-mode=light]{background:#fbfbfc;color:#1f2430}
-  body{font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;max-width:740px;margin:3rem auto;padding:0 1rem;line-height:1.65}
-  h1{font-size:1.8rem;margin:0 0 .3rem}.sub{opacity:.65;margin:0 0 1.5rem}
-  h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.1em;opacity:.6;margin-top:2.2rem}
-  ul{list-style:none;padding:0}li{border:1px solid rgba(127,127,127,.25);border-radius:10px;padding:.85rem 1.05rem;margin-bottom:.65rem}
-  li:has(a.post){background:rgba(124,58,237,.06);border-color:rgba(127,127,127,.3)}
-  a{color:#7c3aed;font-weight:700;text-decoration:none}a:hover{text-decoration:underline}
-  .post b{font-size:1.15rem}.pe{font:600 .66rem/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#7c3aed;opacity:.85;margin-bottom:.35rem}
-  .d{font-size:.9rem;opacity:.72;margin-top:.25rem;color:inherit;font-weight:400}.m{font-size:.78rem;opacity:.6;margin-top:.4rem;color:inherit;font-weight:400}
-  p.about{font-size:.95rem;opacity:.85}
-  button#theme{font:inherit;cursor:pointer;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;border-radius:7px;padding:.3rem .6rem;margin-bottom:1.3rem}</style></head>
-<body><h1>arriqaaq</h1><p class="sub">Build logs and notes on distributed systems — deterministic simulation, databases, and the guts underneath.</p>
-<button id="theme">light / dark</button>
+<title>arriqaaq</title>
+<meta name="description" content="Build logs and notes on distributed systems — deterministic simulation, databases, and the guts underneath.">
+<link rel="canonical" href="https://arriqaaq.com/blog/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="arriqaaq">
+<meta property="og:title" content="arriqaaq">
+<meta property="og:description" content="Build logs and notes on distributed systems — deterministic simulation, databases, and the guts underneath.">
+<meta property="og:url" content="https://arriqaaq.com/blog/">
+<meta property="og:image" content="https://arriqaaq.com/blog/assets/og/home.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="arriqaaq">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="arriqaaq">
+<meta name="twitter:description" content="Build logs and notes on distributed systems — deterministic simulation, databases, and the guts underneath.">
+<meta name="twitter:image" content="https://arriqaaq.com/blog/assets/og/home.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..800&display=swap" rel="stylesheet"><style>
+  :root{color-scheme:light;--bg:#f2f1eb;--alt:#f8f8f5;--fg:#1a1a1a;--muted:#5f6152;--rule:#e0ded3;--neon:#d9f400;--neon-dim:#c2db00;--olive:#657220}
+  *{box-sizing:border-box}html,body{background:var(--bg);color:var(--fg)}
+  body{font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;max-width:760px;margin:0 auto;padding:3.6rem 1.1rem 5rem;line-height:1.65;-webkit-font-smoothing:antialiased;font-feature-settings:'cv11','ss01'}
+  ::selection{background:var(--neon);color:var(--fg)}
+  .eyebrow{font-family:'JetBrains Mono',ui-monospace,monospace;font-weight:600;font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--olive);display:inline-flex;align-items:center;gap:.6rem;margin-bottom:1rem}
+  .eyebrow::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--neon);box-shadow:0 0 0 4px rgba(217,244,0,.2);animation:dotpulse 2.4s ease-in-out infinite}
+  @keyframes dotpulse{0%,100%{box-shadow:0 0 0 4px rgba(217,244,0,.2)}50%{box-shadow:0 0 0 8px rgba(217,244,0,.04)}}
+  h1{font-weight:800;font-size:2.1rem;letter-spacing:-.03em;margin:0 0 .4rem}.sub{color:var(--muted);margin:0 0 2rem;max-width:62ch}
+  h2{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.7rem;text-transform:uppercase;letter-spacing:.14em;color:var(--olive);margin:2.4rem 0 1rem}
+  ul{list-style:none;padding:0;margin:0}
+  li{background:var(--alt);border:1px solid var(--rule);border-radius:12px;padding:1rem 1.15rem;margin-bottom:.8rem;transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease}
+  li:hover{transform:translate(-2px,-2px);box-shadow:4px 4px 0 var(--neon-dim);border-color:var(--fg)}
+  a{color:var(--fg);text-decoration:none}a.post{display:block}
+  .post b{font-size:1.2rem;font-weight:700;letter-spacing:-.02em}
+  .pe{font-family:'JetBrains Mono',ui-monospace,monospace;font-weight:600;font-size:.64rem;letter-spacing:.14em;text-transform:uppercase;color:var(--olive);margin-bottom:.4rem}
+  .d{font-size:.95rem;color:var(--muted);margin-top:.3rem}
+  .m{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.72rem;color:var(--muted);margin-top:.5rem}
+  p.about{font-size:.95rem;color:var(--muted)}
+  p.about a{text-decoration:underline;text-decoration-color:var(--neon-dim);text-decoration-thickness:2px;text-underline-offset:2px}p.about a:hover{background:var(--neon);color:var(--fg)}</style></head>
+<body><div class="eyebrow">Build logs</div><h1>arriqaaq</h1><p class="sub">Build logs and notes on distributed systems — deterministic simulation, databases, and the guts underneath.</p>
 <h2>Posts</h2><ul>
+    <li><a class="post" href="posts/membership.html">
+      <div class="pe">Distributed Systems</div><b>Who else is here? Cluster membership from first principles →</b>
+      <div class="d">Heartbeats, gossip, SWIM, Serf, Lifeguard, and Rapid — how a cluster learns who is in it.</div>
+      <div class="m">~7,730 words · 21 interactive widgets · 15 diagrams</div></a></li>
     <li><a class="post" href="posts/dst.html">
       <div class="pe">Deterministic Simulation Testing</div><b>Learning DST for testing our distributed transactional KV store →</b>
       <div class="d">Building a deterministic simulation tester.</div>
@@ -22,4 +49,4 @@
 </ul>
 <h2>About</h2>
 <p class="about">Senior Software Engineer at SurrealDB. Find me on <a href="https://github.com/arriqaaq" target="_blank" rel="noopener">GitHub ↗</a>.</p>
-<script>document.getElementById('theme').addEventListener('click',function(){var h=document.documentElement;h.setAttribute('data-mode',h.getAttribute('data-mode')==='dark'?'light':'dark');});</script></body></html>
+</body></html>

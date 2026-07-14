@@ -24,23 +24,25 @@
   };
 
   // Concrete colors for SVG (attributes can't read CSS vars). Widgets recompute on theme change.
-  const ZONES_LIGHT = { green: '#16a34a', blue: '#2563eb', purple: '#7c3aed', amber: '#d97706',
+  // Neon accent lives in FILLS (see defs() — the 'purple'/accent zone paints as a solid neon fill).
+  // As a stroke/text value the accent must read on the cream page, so c.purple = ink. Other zones
+  // keep their hue for strokes/text (legible on cream).
+  const NEON = '#d9f400';
+  const INK = '#1a1a1a';
+  const ZONES_LIGHT = { green: '#16a34a', blue: '#2563eb', purple: INK, amber: '#e0850f',
     red: '#dc2626', pink: '#db2777', gray: '#64748b' };
-  const ZONES_DARK = { green: '#4ade80', blue: '#60a5fa', purple: '#a78bfa', amber: '#fbbf24',
-    red: '#f87171', pink: '#f472b6', gray: '#9ca3af' };
 
   function palette() {
-    const dark = isDark();
-    const z = dark ? ZONES_DARK : ZONES_LIGHT;
+    const z = ZONES_LIGHT;
     return Object.assign({}, z, {
-      dark,
-      text: dark ? '#e8eaed' : '#1e293b',
-      muted: dark ? '#9ca3af' : '#64748b',
-      stage: dark ? 'rgba(0,0,0,0.28)' : 'rgba(0,0,0,0.02)',
-      separator: dark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)',
-      accent: z.purple,
-      // syntax colors for code snippets
-      codeKw: z.purple, codeStr: z.amber, codeNum: z.blue, codeCom: dark ? '#6b7280' : '#94a3b8',
+      dark: false,
+      text: INK,
+      muted: '#5f6152',
+      stage: 'rgba(26,26,26,0.02)',
+      separator: 'rgba(26,26,26,0.12)',
+      accent: INK,
+      // syntax colors for code snippets (cream-legible; no muddy green/purple)
+      codeKw: '#c2410c', codeStr: '#a16207', codeNum: '#2563eb', codeCom: '#8b8d7a',
     });
   }
 
@@ -66,9 +68,14 @@
   function defs(colors, uid) {
     const grads = Object.keys(ZONES_LIGHT).map((name) => {
       const c = colors[name];
+      // The accent zone ('purple') paints as a solid neon fill (with ink stroke/text); the
+      // others keep a soft translucent tint of their own hue.
+      const neon = name === 'purple';
+      const hue = neon ? NEON : c;
+      const o1 = neon ? 0.96 : 0.20, o2 = neon ? 0.82 : 0.05;
       return `<linearGradient id="${uid}-g-${name}" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="${c}" stop-opacity="0.20"/>
-        <stop offset="100%" stop-color="${c}" stop-opacity="0.05"/></linearGradient>
+        <stop offset="0%" stop-color="${hue}" stop-opacity="${o1}"/>
+        <stop offset="100%" stop-color="${hue}" stop-opacity="${o2}"/></linearGradient>
       <marker id="${uid}-arr-${name}" markerWidth="9" markerHeight="7" refX="7.5" refY="3.5" orient="auto">
         <path d="M0,0 L9,3.5 L0,7 Z" fill="${c}"/></marker>`;
     }).join('');
@@ -87,11 +94,11 @@
     const s = document.createElement('style');
     s.id = 'dstk-style';
     s.textContent = `
-    .dstk{ --fg:#1e293b; --muted:#64748b; --bd:rgba(0,0,0,.12); --sep:rgba(0,0,0,.1);
-      --stage:rgba(0,0,0,.02); --chip:rgba(0,0,0,.03); --accent:#7c3aed; --code:rgba(0,0,0,.04);
-      font-family:'Space Grotesk','SF Mono','Fira Code',ui-monospace,monospace; color:var(--fg);
-      border:1px solid var(--bd); border-radius:12px; padding:1rem 1.05rem 1.05rem; max-width:840px;
-      background:transparent; }
+    .dstk{ --fg:#1a1a1a; --muted:#5f6152; --bd:#e0ded3; --sep:rgba(26,26,26,.12);
+      --stage:rgba(26,26,26,.02); --chip:rgba(26,26,26,.035); --accent:#1a1a1a; --code:rgba(26,26,26,.05);
+      font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif; color:var(--fg);
+      border:1px solid var(--bd); border-radius:12px; padding:1rem 1.05rem 1.05rem; max-width:100%;
+      background:#f8f8f5; }
     html[data-mode=dark] .dstk{ --fg:#e8eaed; --muted:#9ca3af; --bd:rgba(255,255,255,.12);
       --sep:rgba(255,255,255,.14); --stage:rgba(0,0,0,.28); --chip:rgba(255,255,255,.05);
       --accent:#a78bfa; --code:rgba(0,0,0,.38); }
@@ -113,7 +120,7 @@
     .dstk-btn:hover:not(:disabled){ filter:brightness(1.12); }
     .dstk-btn:disabled{ opacity:.38; cursor:not-allowed; }
     .dstk-btn--green{ background:#16a34a; } .dstk-btn--blue{ background:#2563eb; }
-    .dstk-btn--purple{ background:#7c3aed; } .dstk-btn--amber{ background:#d97706; }
+    .dstk-btn--purple{ background:#d9f400; color:#1a1a1a; } .dstk-btn--amber{ background:#e0850f; }
     .dstk-btn--red{ background:#dc2626; } .dstk-btn--pink{ background:#db2777; }
     .dstk-btn--ghost{ background:transparent; color:var(--fg); border:1px solid var(--sep); }
     html[data-mode=dark] .dstk-btn--green{ background:#15803d; } html[data-mode=dark] .dstk-btn--blue{ background:#1d4ed8; }
@@ -123,18 +130,18 @@
     .dstk-stats{ display:grid; grid-auto-flow:column; gap:.35rem; }
     .dstk-stat{ background:var(--chip); border:1px solid var(--sep); border-radius:6px;
       padding:.3rem .55rem; text-align:center; min-width:62px; }
-    .dstk-stat-v{ font-size:.95rem; font-weight:700; font-variant-numeric:tabular-nums; }
+    .dstk-stat-v{ font-family:'JetBrains Mono',ui-monospace,monospace; font-size:.95rem; font-weight:700; font-variant-numeric:tabular-nums; }
     .dstk-stat-l{ font-size:.56rem; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
     .dstk-log{ flex:1; background:var(--chip); border:1px solid var(--sep); border-radius:6px; padding:.4rem .55rem; min-height:62px; }
     .dstk-log-title{ font-size:.58rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:.2rem; }
     .dstk-log-body{ font-size:.72rem; line-height:1.5; }
     .dstk-log-row{ color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .dstk-log-row:last-child{ color:var(--fg); }
-    .dstk-log-row.ok{ color:#16a34a; } .dstk-log-row.warn{ color:#d97706; } .dstk-log-row.err{ color:#dc2626; }
+    .dstk-log-row.ok{ color:#16a34a; } .dstk-log-row.warn{ color:#c2410c; } .dstk-log-row.err{ color:#dc2626; }
     .dstk-log-row.hl{ color:var(--accent); }
-    .dstk-code{ font-family:ui-monospace,'SF Mono','Fira Code',monospace; font-size:.74rem; line-height:1.55;
+    .dstk-code{ font-family:'JetBrains Mono',ui-monospace,'SF Mono','Fira Code',monospace; font-size:.74rem; line-height:1.55;
       background:var(--code); border:1px solid var(--sep); border-radius:6px; padding:.5rem .65rem; margin:0; overflow:auto; }
-    .dstk-code .k{ color:#7c3aed; } .dstk-code .s{ color:#d97706; } .dstk-code .n{ color:#2563eb; } .dstk-code .c{ color:#94a3b8; }
+    .dstk-code .k{ color:#c2410c; } .dstk-code .s{ color:#a16207; } .dstk-code .n{ color:#2563eb; } .dstk-code .c{ color:#8b8d7a; }
     html[data-mode=dark] .dstk-code .k{ color:#c084fc; } html[data-mode=dark] .dstk-code .s{ color:#fbbf24; }
     html[data-mode=dark] .dstk-code .n{ color:#60a5fa; } html[data-mode=dark] .dstk-code .c{ color:#6b7280; }
     .dstk-cap{ font-size:.72rem; color:var(--muted); margin-top:.45rem; }
