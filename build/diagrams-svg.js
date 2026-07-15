@@ -127,15 +127,14 @@ module.exports = {
   },
 
   'mem-words': {
-    title: 'One word, three concepts — at three different consistency levels',
+    title: 'Membership means two things',
     type: 'svg',
-    body: svg('0 0 720 268',
-      box(20, 96, 175, 76, C.amber, '“membership”', ['one word — shared with', 'view · epoch · configuration']) +
-      box(280, 20, 420, 66, C.blue, 'a liveness view', ['who seems up right now — weak, fleet-wide, always changing', 'failure detection: SWIM · φ-accrual · memberlist']) +
-      box(280, 100, 420, 66, C.green, 'an agreed view sequence', ['v1 → v2 → v3, the same order everywhere — needs agreement', 'group membership service · virtual synchrony']) +
-      box(280, 180, 420, 66, C.red, 'a quorum configuration', ['the tiny replica set majorities are computed from — safety-critical', 'Raft config · Paxos acceptor set']) +
-      arrow(195, 118, 278, 54, 'blue') + arrow(195, 134, 278, 133, 'green') + arrow(195, 150, 278, 212, 'red') +
-      label(360, 262, 'three different consistency requirements — the papers use one word for all three', 'middle', 0.6)),
+    body: svg('0 0 720 196',
+      box(20, 55, 175, 76, C.amber, '“membership”', ['two meanings, in two', 'consistency tiers']) +
+      box(280, 20, 420, 66, C.blue, 'meaning 1 · a liveness view', ['who seems up right now — weak, fleet-wide, always changing', 'failure detection: SWIM · φ-accrual · memberlist']) +
+      box(280, 100, 420, 66, C.green, 'meaning 2 · an agreed view sequence', ['v1 → v2 → v3, the same order everywhere — needs agreement', 'group membership service · virtual synchrony']) +
+      arrow(195, 82, 278, 54, 'blue') + arrow(195, 104, 278, 133, 'green') +
+      label(360, 182, 'a soft local estimate, and an agreed ordered history — different consistency needs', 'middle', 0.6)),
   },
 
   'mem-flp': {
@@ -162,26 +161,13 @@ module.exports = {
     body: svg('0 0 720 258',
       box(90, 20, 360, 62, C.blue, 'soft detection', ['heartbeats · gossip · suspicion — weak and noisy']) +
       box(90, 106, 360, 62, C.purple, 'THE AGREEMENT BOX', ['one agreed, totally-ordered truth']) +
-      box(90, 192, 360, 62, C.red, 'quorum configuration', ['what majorities are computed from — safety-critical']) +
+      box(90, 192, 360, 62, C.red, 'the voter set', ['what majorities are computed from — safety-critical']) +
       arrow(270, 82, 270, 104, 'blue') + arrow(270, 168, 270, 190, 'purple') +
       label(482, 112, 'where the box can live:', 'start', 0.78) +
       label(482, 132, '· an external store (ZooKeeper, etcd)', 'start', 0.65) +
       label(482, 150, '· the protocol itself (Raft, Matchmaker)', 'start', 0.65) +
       label(482, 168, '· the membership layer (Rapid)', 'start', 0.65) +
       arrow(476, 137, 456, 137, 'gray', true)),
-  },
-
-  'mem-tikv': {
-    title: 'The composition in production: TiKV',
-    type: 'svg',
-    body: svg('0 0 720 200',
-      box(20, 46, 165, 78, C.blue, 'soft heartbeats', ['every store reports in;', 'weak, constantly changing']) +
-      box(245, 46, 185, 78, C.amber, 'Placement Driver', ['policy — decides that a', 'region changes, and to what']) +
-      box(490, 46, 210, 78, C.green, 'per-region Raft', ['mechanism — the conf-change', 'commits through the log']) +
-      arrow(185, 85, 243, 85, 'blue') + arrow(430, 85, 488, 85, 'amber') +
-      label(337, 152, "≈ Rapid's seat: detect + decide", 'middle', 0.7) +
-      label(595, 152, "≈ Matchmaker's seat: execute safely", 'middle', 0.7) +
-      label(360, 184, 'the soft view never touches quorum math — the agreement box is per-region Raft', 'middle', 0.55)),
   },
 
   'mem-timeline': {
@@ -304,13 +290,13 @@ module.exports = {
   },
 
   'mem-surrealds-parts': {
-    title: 'SurrealDS, read against the three meanings',
+    title: 'SurrealDS: failure detection, an agreed member list, and reconfiguration',
     type: 'svg',
     body: svg('0 0 720 264',
-      box(40, 20, 640, 58, C.blue, 'Meaning 1 · the liveness view', ['QUIC keep-alive + a view-change timer + a coordinator probe (soft, local);', 'triggers leader failover and recovery — deliberately off the member path']) +
-      box(40, 96, 640, 58, C.purple, 'Meaning 2 · the agreed sequence', ['a numbered view / config sequence every node converges on through the', 'view change (DoViewChange → StartView) — the view change is the agreement box']) +
-      box(40, 172, 640, 58, C.red, 'Meaning 3 · the quorum configuration', ['the voter set (voters + learners), reconfigured through that same view', 'change — grow one voter per view, shrink while a majority is retained']) +
-      label(360, 252, 'the liveness view never decides the voter set — an external operator reconciles the node count, and the store only installs each change safely', 'middle', 0.58)),
+      box(40, 20, 640, 58, C.blue, 'Failure detection', ['keep-alives + a leader-stall timer + a coordinator probe (soft, local);', 'triggers leader failover and recovery — but never changes the member set']) +
+      box(40, 96, 640, 58, C.purple, 'The agreed member list', ['a numbered sequence of member lists every node agrees on and steps', 'through in order — the view change is where that agreement happens']) +
+      box(40, 172, 640, 58, C.red, 'Changing the voter set', ['the voter set (voters + learners), reconfigured through that same view', 'change — grow one voter per view, shrink while a majority is retained']) +
+      label(360, 252, 'failure detection never decides the voter set — an external operator reconciles the node count, and the store installs each change safely', 'middle', 0.58)),
   },
 
   'mem-two-majorities': {

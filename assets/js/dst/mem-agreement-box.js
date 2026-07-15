@@ -105,7 +105,7 @@
         K.el('text', { x: BOX.x + BOX.w / 2, y: BOX.y + 33, 'text-anchor': 'middle', fill: c.red, 'font-size': 11, 'font-weight': 700 }, content).textContent = '✂ (removed)';
       }
       // config(s)
-      K.el('text', { x: 390, y: 234, 'text-anchor': 'middle', fill: c.red, 'font-size': 10.5, 'font-weight': 700 }, content).textContent = 'quorum configuration — safety-critical';
+      K.el('text', { x: 390, y: 234, 'text-anchor': 'middle', fill: c.red, 'font-size': 10.5, 'font-weight': 700 }, content).textContent = 'the voter set — safety-critical';
       K.el('g', { id: `${uid}-cfgs` }, content);
       // quorum indicator
       K.el('circle', { id: `${uid}-qled`, cx: 700, cy: 268, r: 8, fill: c.green }, content);

@@ -5,7 +5,7 @@
  * entirely on WHERE the signal goes:
  *   • lane 1 — routed through an agreement step: everyone sees the same (wrong) verdict, in the
  *     same order. Worst case: a spurious leader election. Cost: a latency blip. Performance.
- *   • lane 2 — wired straight into the quorum configuration: nodes act on the signal at
+ *   • lane 2 — wired straight into the voter set: nodes act on the signal at
  *     different moments, the config forks, two disjoint "majorities" commit two values. Cost:
  *     split brain. Safety.
  * Same input, opposite stakes — which is why the soft layer is ALLOWED to be wrong, and the
@@ -92,7 +92,7 @@
       K.el('line', { x1: 24, y1: 178, x2: 756, y2: 178, stroke: c.separator, 'stroke-width': 1 }, content);
       // lane 2: config chip (+ fork targets, hidden)
       K.el('rect', { id: `${uid}-cfgbox`, x: CFG.x, y: CFG.y, width: CFG.w, height: CFG.h, rx: 9, fill: K.grad(uid, 'red'), stroke: c.red, 'stroke-width': 1.8 }, content);
-      K.el('text', { x: CFG.x + CFG.w / 2, y: CFG.y + 22, 'text-anchor': 'middle', fill: c.red, 'font-size': 10.5, 'font-weight': 700 }, content).textContent = 'quorum configuration';
+      K.el('text', { x: CFG.x + CFG.w / 2, y: CFG.y + 22, 'text-anchor': 'middle', fill: c.red, 'font-size': 10.5, 'font-weight': 700 }, content).textContent = 'voter set';
       K.el('text', { id: `${uid}-cfgtxt`, x: CFG.x + CFG.w / 2, y: CFG.y + 39, 'text-anchor': 'middle', fill: c.text, 'font-size': 10 }, content).textContent = '{ n1, n2, n3 }';
       K.el('line', { x1: DET.x + DET.w, y1: DET.y + 62, x2: CFG.x - 4, y2: CFG.y + CFG.h / 2 - 6, stroke: c.red, 'stroke-width': 1.2, 'stroke-dasharray': '4,4', opacity: 0.5 }, content);
       const f1 = K.el('g', { id: `${uid}-fork1`, opacity: 0 }, content);

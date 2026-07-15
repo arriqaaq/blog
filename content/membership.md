@@ -1,26 +1,29 @@
 ---
 title: Who else is here? Cluster membership from first principles
-dek: Heartbeats, gossip, SWIM, Serf, Lifeguard, and Rapid — how a cluster learns who is in it.
+dek: Heartbeats, gossip, SWIM, Serf, Lifeguard, and Rapid — how a cluster learns who is in it, and the separate problem of changing the voter set.
 eyebrow: Distributed Systems
 slug: membership
 date: 2026-07-14
 ogImage: mem-timeline
-byline: A walkthrough of cluster membership — the underlying theory and the protocols (SWIM, Serf, Lifeguard, Rapid), with each mechanism running live on the page.
+byline: A walkthrough of cluster membership — the underlying theory and the protocols (SWIM, Serf, Lifeguard, Rapid) — plus reconfiguration, the separate problem of changing the voter set — with each mechanism running live on the page.
 ---
 
 Consider a cluster of three servers. One of them stops answering.
 
 It may have crashed, it may be rebooting, or it may be healthy behind a slow or broken network link. A second question follows: *which node decides?* One node may consider the server dead while another can still reach it, and the two cannot both be right. Whatever the system does next — route around the node, promote a replacement, rebalance its data — depends on which answer it acts on.
 
-Every distributed system — databases, message queues, orchestrators — needs a continuously updated answer to one question: **who else is here right now?** That answer is **cluster membership**, and this post describes how systems compute it.
+Every distributed system — databases, message queues, orchestrators — needs a continuously updated answer to one question: **who else is here right now?** That answer is **cluster membership**.
 
-The protocols here span four decades and very different designs. We walk through them to learn how membership is handled as a system scales — the trade-offs, the failure modes, and the techniques the field has settled on. We take them in the order of the three meanings this post is about — the soft liveness view, the agreed sequence, the voter set — and [close](#surrealdb) with SurrealDS, SurrealDB's distributed transactional store, read against all three.
+The term covers several related problems. A system may keep a local estimate of which peers appear reachable. It may also maintain an ordered sequence of membership views that participating nodes install in the same order. Separately, a replicated protocol must define the exact set of voters used to form a quorum, and it must change that set through a reconfiguration procedure.
 
-Before a system can keep that answer current, it has to get past one stubborn difficulty.
+[[SVG:mem-timeline]]
+
+This study forms part of our exploration of membership in SurrealDS. The protocols covered here help us evaluate how detection, dissemination, and coordinated membership views may evolve as the system grows.
+
 
 ## Telling slow from dead {#slow-or-dead}
 
-The difficulty has a single root: **in a distributed system, a slow node and a dead node are indistinguishable from the outside.** A node sends a message and no reply arrives. The remote machine may have crashed, the request may be queued, or the reply may still be in transit. All three cases present identically: silence.
+The difficulty is that **in a distributed system, a slow node and a dead node are indistinguishable from the outside.** A node sends a message and no reply arrives. The remote machine may have crashed, the request may be queued, or the reply may still be in transit. All three cases present identically: silence.
 
 In the widget below, an adversary has decided in advance whether the silent node is slow or dead; the only available actions are to wait longer or to declare it dead:
 
@@ -28,33 +31,11 @@ In the widget below, an adversary has decided in advance whether the silent node
 
 The trade-off is symmetric. Declaring a node dead early risks removing a healthy-but-slow node; waiting longer delays detection of genuine failures. Running the timeout automatically shows that **no timeout value avoids both errors** — it only sets which error is more likely, and how often it occurs.
 
-A timeout only chooses which mistake to make; it can't avoid mistakes. Before we try to do better, we need to be precise about *what* we're maintaining — because the single word "membership" is doing the work of three different jobs.
+A timeout only chooses which mistake to make; no scheme avoids both mistakes. The next section covers the theory of why.
 
-[[SVG:mem-words]]
+## Why no timeout can fix it {#fundamental}
 
-## What membership means {#what-is-membership}
-
-"Membership" refers to three different concepts with different consistency needs.
-
-The first is a **liveness view**: *a local estimate of which nodes seem to be up.* This is soft, fast-changing information — what the theory literature calls a [failure detector](https://dl.acm.org/doi/10.1145/226643.226647), the pings and timeouts that estimate which machines are reachable. No node's estimate is authoritative, and two can disagree without harm, provided it is only used for soft decisions such as which replica to route a read to, or which peer to gossip with next. (At scale a node may not even track the whole cluster — [peer-sampling services](https://people.maths.bris.ac.uk/~maajg/ieeetocs03-scamp.pdf) deliberately keep only a small random *partial* view.)
-
-The second is an **agreed view sequence**: *a numbered history of member lists — v1, v2, v3 — that every correct node observes in the same order.* This is the [group-membership / virtual-synchrony](https://www.cs.cornell.edu/ken/History.pdf) notion, and it requires coordination between nodes. It matters because some actions — rebalancing data, electing a primary — are incorrect if two nodes act on different versions of the member list. (Only *correct* nodes get the guarantee; a partitioned minority may be frozen or stale — that consistent views can't be had for free is [a theorem](https://dl.acm.org/doi/10.1145/248052.248120).)
-
-The third is a **quorum configuration**: *the exact set of replicas whose votes decide whether a write commits.* A write counts as safe once a *majority* of that set has accepted it — so every node has to agree on which replicas are in the set. If two nodes disagree, each can collect its own "majority" from a different group and accept a *conflicting* write, with no shared member to catch the clash. That is what makes this meaning safety-critical rather than merely inconvenient: a slip here can lose already-committed data. Underneath, it is the same agreed, ordered sequence as the second meaning — in Raft the configuration is literally [an entry in the replicated log](https://raft.github.io/raft.pdf) — and a [later section](#membership-vs-consensus) shows why those groups must overlap and how the set is changed without ever breaking that.
-
-So the three are better read as **two consistency tiers** — a soft local estimate, and an agreed ordered sequence — with the third being that sequence with the correctness bar raised to quorum intersection. What makes them easy to confuse is vocabulary: the literature applies the same words — *view*, *epoch*, *configuration* — to all of them, and worse, "view" and "term" also denote *leader* changes in Viewstamped Replication and Raft, a different concern entirely. As a result, papers can appear to be in competition when they address different concepts: a paper about the first meaning and one about the third are not disagreeing, but describing different problems.
-
-The widget below shows one cluster through all three lenses at once. Crashing a node propagates through each layer at a different rate — the soft view changes immediately (and the two observers briefly disagree), the agreed sequence advances once, and the replica configuration changes last:
-
-[[WIDGET:mem-three-views]]
-
-> Recap: "membership" can mean a soft liveness estimate, an agreed ordered history, or a safety-critical voter set; identifying which one a system means is the first step to reading it correctly.
-
-Most of this post lives in that first meaning — the soft liveness view and the protocols that compute it. The other two we separate out because *conflating* them — acting on a soft, disagreeing view where an agreed one is required — is a well-documented class of bugs, one a later section walks through. And that softness isn't lazy engineering; it's forced. The next section is the theory of why.
-
-## Why the ambiguity is fundamental {#fundamental}
-
-The timeout dilemma from [Telling slow from dead](#slow-or-dead) isn't a gap we can engineer around — it's a wall. Three results from the theory of distributed systems say why, and they shape every protocol in the rest of this post.
+The timeout dilemma cannot be engineered away. Three results from distributed-systems theory explain why, and they shape every protocol in the rest of this post.
 
 ### Safety and liveness {#safety-liveness}
 
@@ -64,7 +45,7 @@ A **safety** property states that *nothing bad ever happens*. If it is violated,
 
 A **liveness** property states that *something good eventually happens*. The mirror image holds: no finite prefix of an execution can violate it, because the good thing may still occur later. "Every request eventually receives a reply" is a liveness property — a request that has waited ten minutes has not violated it, and cannot at any finite time.
 
-The distinction is operational rather than philosophical:
+The distinction is easiest to see on a timeline:
 
 [[WIDGET:mem-safety-liveness]]
 
@@ -94,9 +75,39 @@ The same trade-off appears in the **[CAP theorem](https://www.comp.nus.edu.sg/~g
 
 > Recap: slow and dead cannot be reliably distinguished (FLP), so systems preserve safety at all times and regain progress once the network recovers; a timeout only selects which error to favor.
 
+## What membership means {#what-is-membership}
+
+So a system lives with two kinds of answer: soft ones it can afford to be wrong about, and agreed ones it pays coordination for. Those are the **two things "membership" actually means**, and they carry different consistency needs.
+
+[[SVG:mem-words]]
+
+The first is a **liveness view**: *a local estimate of which nodes seem to be up.* This is soft, fast-changing information — what the theory literature calls a [failure detector](https://dl.acm.org/doi/10.1145/226643.226647), the pings and timeouts that estimate which machines are reachable. No node's estimate is authoritative, and two can disagree without harm, provided it is only used for soft decisions such as which replica to route a read to, or which peer to gossip with next. (At scale a node may not even track the whole cluster — [peer-sampling services](https://people.maths.bris.ac.uk/~maajg/ieeetocs03-scamp.pdf) deliberately keep only a small random *partial* view.)
+
+The second is an **agreed view sequence**: an ordered sequence of member lists such as v1, v2, and v3. Correct participants install these views in the same order according to the membership protocol's guarantees. This is the group-membership or [virtual-synchrony](https://www.cs.cornell.edu/ken/History.pdf) use of the term. Producing that sequence requires coordination because a view may drive actions such as assigning shards, selecting a primary, or starting recovery.
+
+The [group-communication literature](https://dl.acm.org/doi/10.1145/503112.503113) defines several forms of membership service and view semantics. The exact guarantees vary by protocol. A partitioned or excluded process may hold an older view, while the participating processes continue with a later one. The [group-membership impossibility result](https://dl.acm.org/doi/10.1145/248052.248120) explains why a service cannot provide every desirable accuracy and consistency property in an asynchronous environment without additional assumptions.
+
+A third, closely related object is the **voter configuration**: the replicas whose votes count toward a quorum in a consensus or replication protocol. This article calls it a configuration to distinguish it from a failure detector's liveness view.
+
+The configuration cannot be derived independently at each node from recent timeout observations. If nodes use different voter sets, they may each form a quorum under their own configuration. Those quorums are not guaranteed to intersect. A protocol therefore records configuration changes through an agreed mechanism.
+
+Terminology is not uniform. Papers and implementations use words such as *membership*, *view*, *epoch*, and *configuration* in overlapping ways. In this article:
+
+- **liveness view** means a local, revisable reachability estimate;
+- **agreed view** means an ordered membership record installed through coordination;
+- **configuration** means the voter set used for quorum decisions;
+- **reconfiguration** means the procedure that changes that voter set.
+
+
+The widget below shows a local liveness view and an agreed view sequence for the same cluster. The local estimates can change at different times. The agreed sequence advances only through its coordination step:
+
+[[WIDGET:mem-two-views]]
+
+> Recap: a liveness view is local and revisable. An agreed membership view is ordered through a protocol. A voter configuration defines quorum participants and changes through reconfiguration. Similar names do not make these objects interchangeable.
+
 ## Membership vs consensus {#membership-vs-consensus}
 
-A natural question, given Raft and Paxos: does **consensus** already solve this — is "who is in the cluster" simply another value to agree on? The two are closely related, and this is where the three meanings of membership are most easily confused.
+A natural question, given Raft and Paxos: does **consensus** already solve this — is "who is in the cluster" simply another value to agree on? The two are closely related, and this is where membership and the voter set are most easily confused.
 
 **What consensus provides.** A consensus protocol makes a fixed set of processes agree on a value — the same value everywhere, with no reversal. Composing decisions into a sequence yields **state machine replication (SMR)**: one agreed log of commands that every replica applies in the same order, so a group of machines behaves as one fault-tolerant machine.
 
@@ -108,7 +119,7 @@ Switching the widget to two configurations shows the limit of this property. **I
 
 **What consensus does not provide.** Consensus *assumes* the member set — its specification is "make *these n processes* agree". Determining the n processes, detecting when one fails, and changing the set safely are separate problems. Consensus also does not detect failures on its own; without an external signal of which nodes are up, it remains safe but can stall indefinitely (again, FLP). Membership supplies that missing piece.
 
-Membership and consensus therefore depend on each other, and the risk lies at the boundary between them. A failure detector's error — suspecting a live node — costs at most a spurious leader election, a performance cost. A quorum configuration's error has a different consequence:
+Membership and consensus therefore depend on each other, and the risk lies at the boundary between them. A failure detector's error — suspecting a live node — costs at most a spurious leader election, a performance cost. A voter-set error has a different consequence:
 
 [[WIDGET:mem-detector-cost]]
 
@@ -116,267 +127,332 @@ The full failure mode: two clients hold different beliefs about the member set a
 
 [[WIDGET:mem-split-brain]]
 
-The remedy is structural. Between the soft, changing detection signal and the safety-critical voter set there must be a step that produces *agreement* — a single ordered record of the member set. Systems place that step differently: an external store such as [ZooKeeper](https://zookeeper.apache.org/) or [etcd](https://etcd.io/); the consensus protocol's own reconfiguration machinery; or a membership layer that runs its own consensus, as Rapid does (covered later):
+The remedy: between the soft, changing detection signal and the safety-critical voter set, add a step that produces *agreement* — a single ordered record of the member set. Systems place that step differently: an external store such as [ZooKeeper](https://zookeeper.apache.org/) or [etcd](https://etcd.io/); the consensus protocol's own reconfiguration machinery; or a membership layer that runs its own consensus, as Rapid does (covered later):
 
 [[SVG:mem-stack]]
 
-Removing that step allows the quorum configuration to diverge, at which point quorum intersection no longer holds:
+Removing that step allows the voter set to diverge, at which point quorum intersection no longer holds:
 
 [[WIDGET:mem-agreement-box]]
 
 > Recap: consensus assumes a member set and membership supplies it. A detector may be wrong at low cost; a voter set must not be, so an agreement step has to sit between the two.
 
-## A tour of the papers {#the-papers}
+## Meaning 1 · The liveness view {#meaning-1}
 
-Each protocol below answers "who else is here?", but sits at a different point on the design space above, and each addresses a limitation of the work before it.
+The protocols in this part produce local estimates of which nodes appear reachable. Their outputs may differ temporarily across nodes, and later observations may revise an earlier suspicion.
 
-[[SVG:mem-timeline]]
+**The baseline: all-to-all heartbeats.** In a direct heartbeat design, every node sends a probe to every other node during each round. With *n* nodes, that produces *n(n−1)* directed probes per round, before counting acknowledgements or retries. The design is simple, but the number of pairwise exchanges grows quadratically.
 
-**The baseline: all-to-all heartbeats.** The simplest design has every node ping every other node each second. It works at small scale, but the cost is n·(n−1) messages per round. The widget below grows the cluster to make the quadratic cost concrete, then switches to gossip, where the same information propagates at linear cost:
+The widget below compares this pattern with fixed-fanout gossip:
 
 [[WIDGET:mem-heartbeat-storm]]
 
-**[Epidemics](https://dl.acm.org/doi/10.1145/41840.41841) (Demers et al., 1987).** This paper models replicated-database synchronization on the mathematics of epidemics, casting each node as *susceptible*, *infective*, or *removed*. **Anti-entropy** — periodically select a random peer and reconcile full state — is slow but thorough; **rumor mongering** — push new information to random peers until it stops being novel — is fast but can occasionally miss a node. Each push round shrinks the still-uninformed fraction by roughly a factor of 1/e, so an update reaches all n nodes in about log(n) rounds at close to linear message cost — the analysis the diagram below sketches, and the basis for every gossip system since.
+**Gossip: dissemination at linear cost.** [Epidemics](https://dl.acm.org/doi/10.1145/41840.41841) (Demers et al., 1987) models replicated-database synchronization on the mathematics of epidemics, casting each node as *susceptible*, *infective*, or *removed*. **Anti-entropy** — periodically select a random peer and reconcile full state — is slow but thorough; **rumor mongering** — push new information to random peers until it stops being novel — is fast but can occasionally miss a node. Each push round shrinks the still-uninformed fraction by roughly a factor of 1/e, so an update reaches all n nodes in about log(n) rounds at close to linear message cost — the analysis the diagram below sketches, and the basis for every gossip system since.
 
 [[SVG:mem-gossip-fanout]]
 
-**[Gossip-style failure detection](https://www.cs.cornell.edu/home/rvr/papers/GossipFD.pdf) (van Renesse et al., 1998).** Gossip used as the detector: each node keeps a heartbeat counter per member, increments its own, and gossips the table; a counter that stops advancing marks a suspect. It scales, but each node still gossips a full member table, and detection time is coupled to gossip time.
+**Gossip as the detector.** [Gossip-style failure detection](https://www.cs.cornell.edu/home/rvr/papers/GossipFD.pdf) (van Renesse et al., 1998) turns the same mechanism on liveness itself: each node keeps a heartbeat counter per member, increments its own, and gossips the table; a counter that stops advancing marks a suspect. It scales, but each node still gossips a full member table, and detection time is coupled to gossip time. The next protocol decouples them.
 
-**[SWIM](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf) (Das, Gupta & Motivala, 2002).** Separates failure detection from membership dissemination. Detection is small and constant-cost — each period, probe one peer, with a few indirect probes as a second opinion — and dissemination piggybacks on those packets. Per-node load stays flat as the cluster grows. A later section covers it in detail.
 
-**[φ-accrual](https://doi.org/10.1109/RELDIS.2004.1353004) (Hayashibara et al., 2004).** A refinement of the *verdict itself*. A conventional detector outputs a binary alive/dead; an **accrual** detector outputs a continuous *suspicion level* and leaves the alive-or-dead call to the application. The φ detector keeps a sliding window of recent heartbeat inter-arrivals, fits a normal distribution to them, and reports φ = −log₁₀(P_later), where P_later is the probability that the next heartbeat is merely late rather than lost. The scale is the useful part: suspecting at φ ≥ 1 risks a mistake about 10% of the time, φ ≥ 2 about 1%, φ ≥ 3 about 0.1% — so each consumer picks the threshold matching its own cost of a false positive. Used in [Cassandra](https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/gms/FailureDetector.java) and [Akka](https://doc.akka.io/libraries/akka-core/current/typed/failure-detector.html).
+## SWIM, memberlist, and Serf {#serf}
 
-[[SVG:mem-phi-accrual]]
-
-**[memberlist](https://github.com/hashicorp/memberlist) and [Serf](https://github.com/hashicorp/serf/blob/master/docs/internals/gossip.html.markdown) (2013).** An implementation of SWIM (from HashiCorp) that adds a dedicated gossip cadence, a TCP full-state sync, graceful leaves, and an event layer. Covered two sections on.
-
-**[Lifeguard](https://arxiv.org/abs/1707.00788) (2017).** Extensions to SWIM based on the observation that many false accusations originate at the node doing the accusing. Three mechanisms follow, covered in their own section.
-
-**[FireFlies](https://www.cs.cornell.edu/home/rvr/papers/Fireflies.pdf) (Johansen et al., 2006).** Membership tolerant of nodes that lie — a Byzantine-tolerant overlay in which a verdict requires agreement among enough independent monitors that a colluding minority cannot remove a healthy node.
-
-**[Census](https://www.usenix.org/conference/usenix-09/census-location-aware-membership-management-large-scale-distributed-systems) (Cowling et al., 2009).** Consistent, location-aware membership at scale, organized into epochs — an early approach to giving every node the same member list.
-
-**[Rapid](https://www.usenix.org/conference/atc18/presentation/suresh) (Suresh et al., 2018).** A strongly-consistent design: detect with many observers, batch the changes, and run a leaderless consensus so the whole cluster moves through one sequence of views. Covered in its own section near the end.
-
-**[ZooKeeper](https://zookeeper.apache.org/) and [etcd](https://etcd.io/).** A different route to the second meaning: no gossip — the member list is held as data in a small, strongly-consistent external store that nodes watch.
-
-**Raft conf-change and [Matchmaker Paxos](https://www.jsys.org/bibliography/2021-09-3-whittakerSolution.html) (2021).** The reconfiguration category: protocols for changing the third meaning — the voter set itself — without breaking quorum intersection during the change. (This is delicate: a simplified membership-change scheme proposed for Raft was [later found unsafe by other researchers and corrected by Raft's author](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J).) Both are covered in the meaning-three deep-dive [below](#raft-reconfig) — Raft placing the change in the log, Matchmaker in an external registry.
-
-Laid out in time, the papers look like a relay — each fixing a limitation of the last. Laid out by *design*, they are points in a many-dimensional space, and two that appear to disagree often just sit on different axes: Raft and Matchmaker are near-twins, while Rapid and Matchmaker barely touch. Before asking which of two "membership papers" is better, it is worth checking which axes they even share.
-
-> Recap: all-to-all heartbeats cost too much; gossip made dissemination cheap; SWIM made detection cheap; memberlist and Serf packaged it as a library and agent; Lifeguard added local health awareness; Rapid added strong consistency.
-
-## Meaning 1 · The liveness view {#meaning-1}
-
-The protocols in this part all compute the [first meaning](#what-is-membership): a *soft* estimate of who is up — local, fast-changing, and allowed both to be wrong and to disagree between nodes. It is what most production "membership" actually is, and the cheapest to be wrong about.
-
-## How Serf works {#serf}
-
-**[Serf](https://github.com/hashicorp/serf/blob/master/docs/internals/gossip.html.markdown)** is a cluster-membership agent from HashiCorp; [Consul](https://www.consul.io/) uses it to maintain the member list under its service catalog. Under Serf sits **[memberlist](https://github.com/hashicorp/memberlist)**, a Go library; under memberlist sits the [SWIM paper](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf). Each layer builds on the one below:
+[Serf](https://github.com/hashicorp/serf/blob/master/docs/internals/gossip.html.markdown) is a cluster membership agent built by HashiCorp, used by [Consul](https://www.consul.io/) to maintain its member list. It builds on [memberlist](https://github.com/hashicorp/memberlist), a Go library whose membership mechanisms are based in part on the [SWIM paper](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf). The layers can be read from the protocol upward:
 
 [[SVG:mem-serf-stack]]
 
+[SWIM](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf) separates two activities:
+
+- **failure detection**, which actively probes selected peers;
+- **membership dissemination**, which carries recent updates between nodes.
+
+Each node initiates a constant number of direct and indirect probes in a protocol period, independent of the cluster size. Dissemination can piggyback on those messages. The size of the membership state and the amount of update traffic can still grow with the cluster, so the constant bound applies to the active probe pattern rather than to every byte processed by a node.
+
 ### The probe {#swim-probe}
 
-SWIM's failure detector is minimal. Each **protocol period** (memberlist default: one second), a node selects one peer and sends a **ping**. If an ack returns within the timeout (500 ms), the peer is considered alive, at a cost of two packets.
+During each **protocol period**, a SWIM node selects a target and sends a **ping**. If an acknowledgement arrives before the probe timeout, that probe completes successfully.
 
-If no ack returns, the node does not immediately mark the peer failed. It selects **k** other members and sends each a **ping-req**, asking them to probe the target on its behalf. (The paper leaves k configurable — [SWIM §3.1](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf); memberlist sets it to 3.) If any of them reaches the target, the ack is relayed back and the target is alive; only one network path had failed. This is what prevents a single bad link from producing a verdict: the target must be unreachable from several vantage points, not one.
+The default memberlist configuration referenced by this article uses a one-second probe interval and a 500-millisecond probe timeout. These are configurable implementation values, not fixed requirements of the SWIM protocol.
 
-Target selection is not uniformly random, which would allow a node to go unprobed for an unbounded time. SWIM keeps members in a list, traverses it **round-robin**, and **re-shuffles the list at the end of each pass** (new joiners are inserted at random positions). This bounds the worst-case interval between two probes of the same node, which in turn bounds detection time ([SWIM §4.3](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf)). The strip in the corner of the widget shows the shuffled probe order:
+If the direct probe times out, the initiator asks **k** other members to probe the same target by sending **ping-req** messages. The SWIM paper leaves *k* configurable ([SWIM §3.1](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf)); the referenced memberlist default sets the indirect-check count to 3.
+
+An acknowledgement returned through any helper shows that at least one alternate path can reach the target. This reduces the influence of a failed or delayed path between the original initiator and target. It does not establish that the target is reachable from every member.
+
+SWIM schedules probes by traversing a shuffled member list rather than repeatedly sampling targets with replacement. After a pass, it reshuffles the list. This keeps the number of protocol periods between probes of a member bounded by the size of the list ([SWIM §4.3](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf)), subject to membership changes and scheduling delays.
 
 [[WIDGET:mem-swim]]
 
-The two member-list panels disagree briefly and continuously while the widget runs. Verdicts propagate by **piggybacking**: updates travel as extra bytes on the pings and acks already in flight, with no dedicated packets. This is the "weakly-consistent" and "infection-style" in SWIM's name — no node holds an authoritative list, and for a liveness view none needs to.
+Membership updates travel with protocol traffic through **piggybacking**. Nodes can therefore hold different local lists while updates are still being disseminated. The lists are weakly consistent: there is no single read of the liveness view that is simultaneously authoritative for every node.
 
-But a failed probe is not yet a verdict. Even when the target is unreachable from every vantage point, SWIM does not drop it from the list — it opens a **suspect → confirm** lifecycle, and only the *confirmed* verdict, gossiped cluster-wide where it overrides everything, moves a node out of every member list for good. That lifecycle, and how two nodes' lists come to agree a node has failed *definitely*, is the next section.
+A failed probe starts a suspicion process. It does not immediately produce a final failure update.
 
 ### Suspicion and incarnation numbers {#incarnation}
 
-A node that is briefly slow — busy CPU, transient network delay — can fail a probe round without having failed. To avoid removing it, a failed probe marks the target **suspect** rather than dead: it remains in the list and is treated as alive for routing, but on a timer. The suspicion is gossiped; if the timer expires with no refutation, the node is confirmed dead.
+A delayed process can miss one or more probe deadlines without having stopped. SWIM therefore marks the target **suspect** and starts a timer. The suspicion is disseminated to other members. If the target refutes the suspicion before the timer expires, nodes can return it to the alive state. If the timer expires without a valid refutation, the protocol emits a confirmed-failure update.
 
 [[SVG:mem-swim-lifecycle]]
 
-Refutation raises an ordering problem. If n3 is suspected and another node then hears from it, how is the "n3 is alive" message known to be *newer* than the "n3 is suspect" message? Gossip has no global clock, and the two messages can arrive in different orders at different nodes.
+The updates need an ordering rule. A node may receive an Alive update and a Suspect update for the same member in either order, and message arrival time does not identify which state is newer.
 
-SWIM's answer: every member carries an **incarnation number**, and only that member may increment its own. When n3 learns it is suspected, it increments its incarnation and gossips *Alive* at the new value. The override rules ([SWIM §4.2](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf)) resolve the rest: a higher incarnation always wins; at *equal* incarnation, Suspect overrides Alive (otherwise a stale "alive" message from before the suspicion would cancel it); and a Confirm overrides both at any incarnation. The widget below runs the sequence, including a refutation attempted at the wrong incarnation:
+SWIM associates each member with an **incarnation number**. A member can increase its own incarnation number when it learns that an earlier incarnation has been suspected. It then disseminates an Alive update carrying the higher number.
+
+The SWIM ordering rules ([SWIM §4.2](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf)) are:
+
+- a higher incarnation number supersedes a lower one;
+- for the same incarnation, Suspect supersedes Alive;
+- a confirmed-failure update is terminal for that membership instance.
+
+The equal-incarnation rule prevents an old Alive message from canceling a later suspicion. A process that returns after its membership instance has been confirmed failed must be represented in a way that distinguishes the new instance from the confirmed one.
 
 [[WIDGET:mem-incarnation]]
 
-The terminal Confirm is significant: a node declared dead cannot re-enter under the same identity. It rejoins as a new member at incarnation zero, which prevents membership state from moving backwards.
-
 ### What memberlist adds {#memberlist}
 
-The SWIM paper describes one loop; memberlist runs three.
+memberlist combines several periodic activities around the SWIM probe mechanism. The values below are the configurable defaults in the linked implementation at the version used for this article.
 
-First, dissemination has its own cadence. Piggybacking spreads updates only as fast as probes occur — one per second per node — so memberlist adds a dedicated **gossip loop**: every **200 ms**, queued membership updates are sent over UDP to **3** random peers, five times the probe rate.
+**Probe loop.** A node probes one selected member at each probe interval. Direct and indirect checks produce Alive, Suspect, and failure updates.
 
-Second, an anti-entropy layer. UDP can drop messages, and epidemic dissemination can leave some nodes un-updated, so memberlist adds **push/pull**: every **30 seconds** each node selects one random peer, opens a TCP connection, and exchanges complete membership state — the anti-entropy of Demers et al., reconciling anything gossip missed. A joining node uses the same mechanism: one push/pull with an existing member transfers the full list.
+**Gossip loop.** At the default 200-millisecond interval, a node sends queued updates over UDP to a configurable number of random peers; the referenced default fanout is 3. This loop allows updates to travel more frequently than the one-second probe interval.
 
-The suspicion timer scales with cluster size, since a refutation needs time to reach the suspected node and return. memberlist sets the *floor* to **SuspicionMult (4) × log₁₀(N) × probe interval** (base-10 log, floored at one — about 4 s in a small cluster). A lone suspicion does not start at that floor: it opens **SuspicionMaxTimeoutMult (6)× higher** and shrinks toward the floor only as *independent* nodes confirm the same suspicion. That adaptive collapse is from Lifeguard, covered in the [next section](#lifeguard). The widget below shows the timeout growing with cluster size, and the difference between a crash and a graceful leave:
+**Push/pull loop.** At the default 30-second interval, a node opens a TCP connection to a selected peer and exchanges a broader membership snapshot. This acts as an anti-entropy mechanism for updates that did not reach a node through UDP gossip. Joining nodes also use push/pull exchanges to obtain membership state.
+
+The suspicion timeout depends on the cluster size and configuration values. With the referenced defaults, memberlist sets the floor to `SuspicionMult (4) × log₁₀(N) × probe interval` — a base-10 logarithm floored at one, about 4 seconds in a small cluster. A first suspicion does not start at that floor: it opens `SuspicionMaxTimeoutMult (6)×` higher and collapses toward the floor as independent confirmations arrive, through the Lifeguard-derived mechanism described next.
 
 [[WIDGET:mem-serf-machine]]
 
+The exact intervals and multipliers are operational settings. Changing them alters detection latency, network traffic, and tolerance for delayed processing.
+
 ### What Serf adds {#serf-layer}
 
-memberlist maintains the list; **Serf** provides an interface on top of it. It exposes state transitions as an event stream — events such as member-join, member-leave, and member-failed (plus member-update and member-reap). It distinguishes leaving from failing: a node shutting down cleanly broadcasts a **leave intent** first, so peers record it as "left" rather than running the suspect-timeout-dead sequence for a node that was intentionally removed. Because intents and user events propagate over gossip with no global clock, Serf stamps them with **Lamport clocks** — logical timestamps that preserve the order of events such as a leave followed by a rejoin.
+memberlist maintains membership state. **Serf** exposes changes in that state through an event interface.
 
-> Recap: Serf combines SWIM's probe (with indirect probes) and suspicion-with-refutation, memberlist's three loops (probe 1 s, gossip 200 ms, push/pull 30 s), and an event layer with leave intents and Lamport-clocked ordering.
+Its member events include joins, leaves, failures, updates, and eventual reaping of old records. A process that shuts down normally can broadcast a leave intent, allowing peers to distinguish that event from a timeout-based failure indication.
+
+Serf also attaches Lamport timestamps to intents and user events. These logical timestamps provide an ordering relation for events that may arrive through gossip in different network orders. They do not provide a physical clock or make every membership observation simultaneous.
+
+> Recap: SWIM initiates direct and indirect probes and disseminates ordered membership updates. memberlist adds configurable gossip and push/pull loops around that mechanism. Serf exposes the resulting state changes as events and represents graceful leave separately from timeout-based failure.
 
 ## Lifeguard: local health awareness {#lifeguard}
 
-Even with suspicion and indirect probing, SWIM-style detectors still produce false positives — healthy nodes briefly declared failed — and each one triggers downstream work: view changes, failovers, rebalancing. The widget below shows the cost of flapping: the same fault pattern under two detectors, with a rebalancing counter on the right:
+A SWIM observer can produce false suspicions when the observer itself is delayed. A process under CPU pressure, a runtime pause, or network loss may send probes late, process acknowledgements after its local deadline, or fail to service indirect-probe traffic promptly.
+
+The widget below compares repeated state changes under two detector configurations:
 
 [[WIDGET:mem-flap]]
 
-The [Lifeguard paper](https://arxiv.org/abs/1707.00788) (Dadgar, Phillips & Currey, 2017) identifies a major source of these false positives at **the node doing the detecting**. When a node's own resources degrade — a GC pause, CPU contention, network delay or loss — its probes are sent late, its timers fire early relative to its slowed processing, and its acks are read after the deadline. In the paper's terms, the *local failure detector module* itself may be at fault: a degraded node observes a healthy cluster as a set of failures. Lifeguard extends SWIM with **local health awareness** ([Lifeguard §IV](https://arxiv.org/abs/1707.00788)) — three mechanisms that make a node account for its own condition before judging others.
+The [Lifeguard paper](https://arxiv.org/abs/1707.00788) describes three extensions that make a SWIM-style detector account for local health.
 
-**One: the Local Health Multiplier, applied by *LHA-Probe*.** Each node keeps a self-health score, **LHM**, a saturating counter from 0 to 8. It is incremented on a failed probe (+1); on a probe with a missed **nack** — a ping-req helper that cannot reach the target sends an explicit negative acknowledgement (in the paper, at 80% of the timeout), so the absence of any nack points at the initiator's own path (+1); and on having to refute a suspicion about oneself, since a cluster-wide suspicion of a node usually reflects that node's own slowness (+1). A clean probe decrements it (−1). The paper's *LHA-Probe* mechanism then multiplies both probe interval and timeout by **(LHM+1)**, so at LHM 8 probes go out every 9 seconds with a 4.5-second timeout, giving a slow node more time to read acks before treating their senders as failed. (memberlist implements a lighter version: it caps the multiplier at ×8 — an 8-second maximum probe interval — scales only the interval, leaves the 500 ms timeout unchanged, and sends the nack at the full timeout rather than at 80%.)
+**1. Local Health Multiplier.** The paper defines a bounded local-health score, LHM, a saturating counter from 0 to 8. Three events increase it by one: a failed probe; a probe with a missing negative acknowledgement (a ping-req helper that cannot reach the target sends an explicit nack, so the absence of any nack points at the initiator's own path); and having to refute a suspicion about oneself. A successful probe decreases it by one. In the paper's LHA-Probe mechanism, the score multiplies both the probe interval and the timeout by (LHM + 1), so a locally delayed observer waits longer before classifying another member as unresponsive — at LHM 8, probes go out every 9 seconds with a 4.5-second timeout.
+
+The memberlist implementation uses the same idea with implementation-specific details. It caps the multiplier at ×8 (an 8-second maximum probe interval), scales only the interval and leaves the 500-millisecond timeout unchanged, and sends the nack at the full timeout rather than at 80% of it. The timeout and negative-acknowledgement timing should be read from the linked version rather than inferred from the paper's pseudocode, because they are not identical.
 
 [[SVG:mem-lhm]]
 
-**Two: dynamic suspicion timeouts.** A single suspicion may come from a degraded detector, so it begins with a long timeout. As *independent* nodes confirm the same suspicion, the timeout decreases — from Max toward Min on a log curve, reaching Min after K=3 confirmations. An unconfirmed suspicion waits; a suspicion with independent agreement resolves quickly.
+**2. Dynamic suspicion timeouts.** A suspicion begins with a longer deadline. Confirmations from distinct observers reduce that deadline toward a configured minimum on a log curve, reaching the minimum after three independent confirmations. One observer therefore waits longer before producing a confirmed-failure update, while several observers reporting the same condition can complete the suspicion sooner.
 
-**Three: the buddy system.** In SWIM as described so far, a suspected node learns of its suspicion only if gossip happens to reach it, and may spend its refutation window unaware. Lifeguard changes the piggyback priority so that a node probing a member it suspects includes the suspicion in the ping. The suspected node is notified directly and can refute immediately.
-
-The widget below runs all three: degrade the "me" node with Lifeguard off and count the false accusations, then reset and repeat with it on:
+**3. Buddy notification.** When a node probes a member that it currently suspects, it gives the suspicion update high piggyback priority. The target can then learn about the suspicion directly and issue a refutation without waiting for an unrelated gossip exchange.
 
 [[WIDGET:mem-lifeguard]]
 
-The paper's evaluation reports false-positive reductions in the 10–100× range (over 50× on average), with median detection latency roughly unchanged and tail latencies a few percent higher, because the dynamic timeout collapses quickly when several members agree. The three mechanisms are part of memberlist.
+In the paper's evaluated workloads, these mechanisms reduced false positives by roughly 10–100× (over 50× on average) relative to the evaluated SWIM baseline, with median detection latency roughly unchanged and tail latencies a few percent higher. Those measurements apply to the paper's configurations and fault models; they are not a general bound for every deployment.
 
-> Recap: LHM slows a degraded detector's probing, dynamic suspicion timeouts shorten only under independent confirmation, and the buddy system notifies a suspected node directly so it can refute.
+memberlist implements variants of the local-awareness, dynamic-suspicion, and buddy-notification ideas. Its exact behavior is determined by the implementation version and configuration values.
+
+> Recap: Lifeguard adds information about the observer's own condition, shortens suspicion deadlines when independent reports accumulate, and gives suspected nodes a more direct opportunity to refute the suspicion.
+
+## φ-accrual: suspicion as a level {#phi-accrual}
+
+The detectors described so far eventually map observations to states such as Alive, Suspect, and Failed. An **accrual failure detector** instead reports a level of suspicion and leaves the final threshold to the consumer.
+
+The [φ-accrual detector](https://doi.org/10.1109/RELDIS.2004.1353004) keeps a sliding window of recent heartbeat inter-arrival times and fits a normal distribution to that history. It reports:
+
+**φ = −log₁₀(P_later)**
+
+Here, `P_later` is the model's estimated probability of observing an inter-arrival time at least as large as the current delay. Under that fitted model, φ = 1 corresponds to a tail probability of 0.1, φ = 2 to 0.01, and φ = 3 to 0.001.
+
+These values are model outputs, not guaranteed real-world false-positive rates. Their calibration depends on the arrival-time distribution, the sample window, and how well current network and process behavior resembles the recorded history.
+
+A consumer chooses a threshold according to how it uses the result. A routing layer may tolerate a lower threshold than a component that triggers an expensive failover. [Cassandra](https://github.com/apache/cassandra/blob/trunk/src/java/org/apache/cassandra/gms/FailureDetector.java) and [Akka](https://doc.akka.io/libraries/akka-core/current/typed/failure-detector.html) include φ-accrual-style failure detectors in their implementations.
+
+[[SVG:mem-phi-accrual]]
+
+The output remains a local estimate. Different observers can report different φ values for the same process.
 
 ## Meaning 2 · The agreed view sequence {#meaning-2}
 
-Here the requirement hardens into the [second meaning](#what-is-membership): not a local guess but one ordered history of member lists that every correct node observes identically — which, unlike a liveness view, cannot be had without coordination.
+Some operations require more than local reachability estimates. A shard assignment, primary selection, or recovery plan may need an ordered membership record so that participating nodes do not act on unrelated versions of the member list.
+
+An **agreed view sequence** provides that record. The protocol defines which nodes participate, how a view is proposed, when it is installed, and what an excluded or partitioned node may observe.
+
+There are several architectural placements for this coordination. An application can store membership records in a strongly consistent service such as [ZooKeeper](https://zookeeper.apache.org/) or [etcd](https://etcd.io/) and watch for changes. A membership protocol can organize changes into epochs, as [Census](https://www.usenix.org/conference/usenix-09/census-location-aware-membership-management-large-scale-distributed-systems) does. Another approach is to combine failure reports with an agreement protocol, as Rapid does.
 
 ## Rapid: one consistent view {#rapid}
 
-The protocols since SWIM produce the first meaning: a soft, eventually-convergent liveness view, which suits routing and health checks. But some consumers — anything that derives a voter set, a shard map, or a primary — require the second meaning: every node observing the **same sequence of membership views**. These consumers also need the view to be stable under adverse conditions, since each view change they emit triggers failovers and data movement.
+[Rapid](https://www.usenix.org/conference/atc18/presentation/suresh) is a membership protocol designed to produce a consistent sequence of views at large cluster sizes. Its design combines multiple observers, cut detection, and agreement on a proposed membership change.
 
-[Rapid](https://www.usenix.org/conference/atc18/presentation/suresh) (Suresh, Malkhi, Gopalan, Porto Carreiro & Lokhandwala, 2018) is a membership service for that requirement: strongly consistent views, at thousands of nodes, designed to avoid flapping even under "grey" failures — one-way links, heavy packet loss — that cause single-observer detectors to oscillate. It has three stages.
+**Multiple observers.** Rapid overlays several pseudo-random rings on the current membership. A process is monitored by its predecessors on those rings. The [paper's evaluation](https://www.usenix.org/system/files/conference/atc18/atc18-suresh.pdf) commonly uses **K = 10**, so each process has ten observers in that configuration.
 
-**Multiple observers, arranged as an expander.** Every process is monitored by **K** observers — its predecessors on K pseudo-random rings overlaid on the membership (the [evaluation uses K=10](https://www.usenix.org/system/files/conference/atc18/atc18-suresh.pdf)). This makes the monitoring graph an expander: well-connected, with no verdict resting on a single observer.
+The purpose is to avoid making a membership proposal from one observer's report alone. The ring construction distributes observer relationships across the membership.
 
-**Cut detection with watermarks** (the paper's term is **multi-process cut detection**). Observer alerts about a node are tallied rather than acted on directly. At or above the high watermark **H** (9 of 10), the node is **stable** and included in the proposed change. Below the low watermark **L** (3), the alerts are treated as **noise**. Between L and H, the node is **unstable** — enough observers have alerted to be notable, but not enough to cross H, which is the signature of a flapping or one-way link — and Rapid delays the proposal until every such node resolves. It then announces all stable changes as **one batched cut**, so ten simultaneous crashes become one view change rather than ten.
+**Cut detection with watermarks.** Observers send alerts about processes they cannot reach. Rapid counts those alerts and places each process relative to a low and high watermark.
+
+In the example parameters used by the paper:
+
+- fewer than **L = 3** alerts are below the low watermark;
+- **H = 9** or more alerts reach the high watermark;
+- counts between L and H are in an unstable region.
+
+A process at or above the high watermark can be included in a proposed cut. A process in the unstable region delays proposal formation until its alert count moves out of that region. The protocol can include several stable joins or removals in one proposed cut.
 
 [[SVG:mem-rapid-watermarks]]
 
-**Leaderless agreement on the cut.** Because nodes tally roughly the same alerts, almost every node independently computes the same proposal — the paper's *almost-everywhere agreement*. Rapid uses a Fast-Paxos-style vote on this: if **[more than three-quarters of the membership](https://www.usenix.org/system/files/conference/atc18/atc18-suresh.pdf)** report an identical cut, it is decided in one round with no leader. (Strictly more than three-quarters, rather than a simple majority, is required to skip the leader: two such quorums always overlap in more than half the membership, so they cannot decide two different cuts concurrently — a bare majority can overlap in a single node, which is not enough.) When proposals diverge, it falls back to classical Paxos — the fast-path/fallback structure again.
+**Agreement on the cut.** Nodes receive overlapping sets of alerts and often compute the same proposed cut. Rapid uses a Fast-Paxos-style path when [more than three-quarters of the membership](https://www.usenix.org/system/files/conference/atc18/atc18-suresh.pdf) report the same proposal. The quorum size and voting rules are part of Rapid's safety argument for that path.
+
+When proposals do not receive the required fast-path support, the protocol uses its fallback agreement path rather than installing competing cuts independently.
 
 [[SVG:mem-rapid-quorum]]
 
-The widget below shows the stages: failing three nodes tallies alerts against the watermarks into a single batched cut; a grey one-way fault holds a node in the unstable band where a gossip detector would flap; single-observer mode produces extra view changes:
+The widget below shows the three stages: observers report changes, watermark logic forms a cut, and the agreement step installs a new view. It also shows how a process can remain in the unstable band while reports disagree:
 
 [[WIDGET:mem-rapid-rings]]
 
-Joins use the same pipeline — a joiner obtains **K temporary observers** through a seed member and enters through the same cut-detection-and-consensus path as removals (the temporary assignment lasts until a configuration change reflects the join). From the paper's evaluation: Rapid bootstraps 2,000-node clusters [2–2.32× faster than memberlist and 3.23–5.8× faster than a ZooKeeper-based scheme](https://www.usenix.org/system/files/conference/atc18/atc18-suresh.pdf), and [removes ten simultaneous crashes in one single-step consensus decision](https://www.usenix.org/system/files/conference/atc18/atc18-suresh.pdf). In its asymmetric-partition scenario, memberlist oscillates without removing all the faulty processes and ZooKeeper does not react to them, while Rapid detects and removes them; a related scenario applies [80% packet loss to 1% of processes](https://www.usenix.org/system/files/conference/atc18/atc18-suresh.pdf).
+Joins use the same broad pipeline. A joining process first obtains temporary observers through an existing member, then enters a later view through cut detection and agreement.
 
-> Recap: Rapid uses many observers per node, a high/low watermark tally that batches changes and defers decisions about unstable nodes, and a leaderless three-quarters vote that gives every node the same view history.
+The Rapid paper reports several measurements for its test configurations. In its 2,000-node bootstrap experiment, Rapid completed bootstrap [2–2.32× faster than the memberlist-based scheme and 3.23–5.8× faster than a ZooKeeper-based scheme](https://www.usenix.org/system/files/conference/atc18/atc18-suresh.pdf), and [removes ten simultaneous crashes in a single-step consensus decision](https://www.usenix.org/system/files/conference/atc18/atc18-suresh.pdf). Other experiments apply asymmetric communication and packet loss — one scenario applies 80% packet loss to 1% of processes; in the asymmetric-partition case, memberlist oscillates without removing all faulty processes and ZooKeeper does not react, while Rapid detects and removes them. These are results from the paper's implementation, cluster setup, and workloads rather than general performance guarantees.
 
-## Meaning 3 · The quorum configuration {#meaning-3}
+> Recap: Rapid collects reports from several observers, waits for alert counts to leave the unstable region, groups stable changes into a cut, and installs that cut through an agreement protocol.
 
-The strictest tier is the [third meaning](#what-is-membership): the exact set of replicas a write's majority is counted from. A wrong guess here is not a performance cost but a correctness one — orphaned or conflicting commits — so the set can never be a soft view. It has to be an agreed configuration, and *changing* it is itself a consensus decision.
+## The voter set: a separate problem — reconfiguration {#voter-set}
 
-A note on names, because the vocabulary bites hardest here. The rigorous literature does not call this "membership" at all. There, **membership** is the failure-detector notion behind the first two meanings — an agreed, ordered sequence of *views* of who seems up, what [one survey](https://dl.acm.org/doi/10.1145/503112.503113) calls "the dual of a failure detector" — and it is defined so that a node leaves a view only once it has genuinely failed. The voter set is a different object: the papers name it a **configuration**, and its change **reconfiguration**. The two even conflict, because reconfiguration routinely removes *healthy* voters — to shrink or rebalance — which membership's "removed means it crashed" rule forbids. The word attached to voter sets mostly because [Raft's §6 is titled "cluster membership changes"](https://raft.github.io/raft.pdf), and the vernacular stuck. This post still counts it as a third meaning because that overload is exactly the trap it is warning about — but what the rest of this section describes is *reconfiguration*: a consensus problem, not a failure-detection one.
+The **voter configuration** is the set of replicas whose responses count toward quorum decisions. Consensus and replication papers use several names for this object, including membership, configuration, acceptor set, and replica set. This article uses **configuration** because the object is different from a local failure-detector view.
 
-## Changing the voter set safely: reconfiguration {#raft-reconfig}
+A process does not stop being a voter merely because another process has timed out while contacting it. Removing or adding a voter changes the quorums that can decide future values. The protocol therefore has to order that change relative to earlier and later decisions.
 
-Consensus assumes a fixed set of voters ([What consensus does not provide](#membership-vs-consensus)). Real clusters are not fixed — machines are added, replaced, and retired — so the voter set has to change while the system keeps committing. The danger is precisely the [split brain](#membership-vs-consensus) from before, now opened by the *change itself* rather than by a failure detector.
+The procedure that changes the voter set is **reconfiguration**. Its design must specify:
 
-**Why a naive switch is unsafe.** Suppose the voters go straight from an old set *C_old* to a new set *C_new*. There is a window in which some nodes still act on *C_old* while others already act on *C_new*. If a majority of *C_old* and a majority of *C_new* happen to be **disjoint**, each can make a decision — elect a leader, commit a write — with no shared member to catch the clash. That is two independent majorities in one cluster: split brain, caused by the reconfiguration itself.
+- how the old configuration authorizes a transition;
+- when the new configuration begins to govern decisions;
+- how state is transferred to new replicas;
+- which quorums must be contacted during the transition;
+- how concurrent leaders or delayed messages are handled.
+
+## Changing the voter set: reconfiguration {#raft-reconfig}
+
+Suppose a system changes from an old configuration *C_old* to a new configuration *C_new*. A direct local switch is not enough. Some processes may receive the change earlier than others, and delayed operations may still be using the old configuration.
+
+If an old-config quorum and a new-config quorum can be disjoint, each quorum can contain no process that observed the other's decision. A reconfiguration protocol prevents the two configurations from acting as unrelated consensus groups during the transition.
 
 [[WIDGET:mem-raft-reconfig]]
 
-[Raft](https://raft.github.io/raft.pdf) gives two ways to close that window, both resting on the same [quorum-intersection](#membership-vs-consensus) property.
+[Raft](https://raft.github.io/raft.pdf) describes two approaches.
 
-**Joint consensus.** The cluster does not jump from *C_old* to *C_new*; it first commits a **joint** configuration *C_old,new* in which every decision requires a majority of the old set **and** a majority of the new set. While the joint configuration is in force, no decision can be reached by an old-only or a new-only majority, so the two worlds cannot diverge. Once *C_old,new* is committed, the cluster moves on to *C_new*. Two overlapping phases, safe for an arbitrary change.
+**Joint consensus.** The protocol first enters a joint configuration, commonly written *C_old,new*. During that phase, an operation must satisfy the quorum requirements of both the old and new configurations. After the joint configuration is committed, the protocol can commit the new-only configuration.
+
+The joint phase orders the transition through the replicated log and prevents an old-only quorum or a new-only quorum from completing the transition by itself.
 
 [[SVG:mem-raft-joint]]
 
-**Single-server changes.** Raft's simpler option: add or remove exactly **one** voter at a time. A one-member difference is enough on its own — any majority of *C_old* and any majority of *C_new* must share a member, because two sets differing by a single element cannot have disjoint majorities. No joint phase is needed; a larger change is just taken one step at a time.
+**Single-server changes.** Raft also describes changing one voter at a time. Consecutive configurations that differ by one member have intersecting majorities. A larger requested change is represented as a sequence of one-member transitions.
 
-**Even the simple rule is subtle.** The single-server scheme as first published turned out to have a safety bug, [found in 2015 by Huanchen Zhang and Brandon Amos while formalizing Raft's reconfiguration by hand](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J): a newly elected leader could append a *further* configuration change before it had committed anything in its current term, which can destroy the guarantee that a single voter sits in both the quorum that committed an entry and the quorum that elects the next leader — the guarantee the safety proof rests on. Raft's author confirmed it and added one constraint: *a leader may not append a new configuration entry until it has committed an entry from its current term.* Joint consensus was never affected. The lesson matches the rest of this post — reconfiguration is where the delicate correctness bugs live, even when the rule looks obviously safe.
+This rule is only one part of the protocol. Leader election, log commitment, configuration-entry ordering, and restrictions on proposing another change still matter. A [correction discussed on the Raft development list](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J) added a condition that a newly elected leader must commit an entry from its current term before appending a further configuration change. Joint consensus uses a different transition rule and was not changed by that correction.
 
-**Where the agreement step lives.** Raft keeps the configuration *in the log* — a config change is an ordinary entry, ordered with the commands around it. That is one point in a wider space, the same "where does agreement happen?" question this post keeps circling. [Viewstamped Replication](http://pmg.csail.mit.edu/papers/vr-revisited.pdf) commits the change in its log too, but performs the cutover as an *epoch change* — a view change to a new membership. [Lamport, Malkhi and Zhou](https://lamport.azurewebsites.net/pubs/reconfiguration-tutorial.pdf) survey the rest: you can instead *stop* the old configuration cleanly and start a fresh one, or lift the decision out of the data path entirely.
+**Where configuration history is stored.** Raft places configuration entries in the replicated log. Viewstamped Replication also orders reconfiguration through replicated protocol state, using its view and epoch machinery.
 
-**Matchmaker Paxos.** That last route is [Matchmaker Paxos](https://mwhittaker.github.io/publications/matchmaker_paxos.pdf) (Whittaker et al., 2021), the modern form of [Vertical Paxos](https://lamport.azurewebsites.net/pubs/vertical-paxos.pdf). Rather than thread the configuration through the log, it hands config authority to a small auxiliary set of **matchmakers** that record which configuration each round uses. To move to a new configuration at round *i*, the leader does two things at a matchmaker quorum in a single round trip: it **registers** the new configuration for all rounds ≥ *i*, and **reads back** every configuration used in rounds < *i*. Those prior configurations name exactly the replica sets that might already hold a chosen value, so the leader recovers each — reading a quorum of it — before proceeding. Same quorum-intersection guarantee, relocated off the acceptors: they never learn a change happened, steady state pays nothing, and a reconfiguration costs one extra round trip.
+Other protocols move configuration authority elsewhere. [Matchmaker Paxos](https://mwhittaker.github.io/publications/matchmaker_paxos.pdf), building on [Vertical Paxos](https://lamport.azurewebsites.net/pubs/vertical-paxos.pdf), uses a set of matchmakers that records which acceptor configuration belongs to each round.
+
+For a new round, a proposer registers the new configuration with a matchmaker quorum and learns the prior configurations that may contain a chosen value. It then performs the recovery work required by those configurations before using the new one. This removes configuration processing from the normal acceptor path, while adding work when a new configuration is introduced.
 
 [[SVG:mem-matchmaker]]
 
-Raft (in the log) and Matchmaker (in an external registry) are two placements of the same step; underneath, the safety argument is quorum intersection every time.
+Raft and Matchmaker Paxos therefore place configuration history in different components. Both protocols define how a proposer learns which earlier quorums may contain decisions and how the next configuration is authorized.
 
-> Recap: changing the voter set can itself cause split brain if an old and a new majority go disjoint; the fix is to preserve quorum intersection across the change — Raft does it in the log (joint consensus needs both majorities; one-at-a-time changes keep consecutive majorities overlapping), Matchmaker Paxos in an external registry — and even Raft's one-at-a-time rule needed a correctness fix.
+> Recap: reconfiguration is an ordered protocol transition, not a timeout response. Joint consensus requires old and new quorums during an intermediate phase. One-at-a-time changes use overlap between consecutive configurations together with the rest of the consensus protocol. Matchmaker Paxos records configuration history in a separate matchmaker service.
 
-## Membership in SurrealDS {#surrealdb}
+## How membership works in SurrealDS {#surrealdb}
 
-**SurrealDS** is SurrealDB's distributed transactional store. SurrealDB uses it as a storage backend: each node runs a transaction coordinator alongside a local replica, and an interactive SQL transaction is driven by the coordinator against a set of SurrealDS replicas. Read against the [three meanings](#what-is-membership), its membership sits squarely in the last two — and, unlike everything else in this post, it reaches them without leaning on the first.
+**SurrealDS** is SurrealDB's distributed transactional store. Each SurrealDB node runs a transaction coordinator and a local SurrealDS replica. A coordinator executes a transaction against replicas named by the current store configuration.
 
-**Meaning one, the liveness view — present, but off the membership path.** SurrealDS has liveness machinery: a view-change timer carries a stalled view change through to a new leader, and a coordinator probe recovers a transaction whose coordinator has died. But unlike the gossip detectors earlier in this post, none of that ever edits the member set. A replica is never dropped because it *looks* dead — it leaves only when the configuration says so. If anything, liveness only *blocks* a change: a shrink waits while a retained voter is still unhealthy, rather than evicting it.
+> Note: The earlier protocols describe different points in the membership design space. We are studying these approaches as part of the continued development of SurrealDS, particularly how their ideas apply as clusters grow and encounter a broader range of network and failure conditions.
 
-**Meaning two, the agreed sequence — the member set is a numbered configuration.** Every node moves through the same ordered sequence of views. A membership change is committed through the store's own view-change path — the same path it uses to install a new leader — so it is agreed by a quorum before it takes effect.
+The design described here separates three concerns:
 
-**Meaning three, the quorum configuration — the voter set.** That configuration is the set of replicas a write's majority is counted against, so the store cannot let two nodes hold different ideas of it. SurrealDS changes it through the same view-change path as everything else — [reconfiguration](#raft-reconfig) folded into a view — always preserving [quorum intersection](#membership-vs-consensus), so consecutive views' quorums overlap and no committed write is orphaned. The two directions are not symmetric: the set **grows one voter at a time** (each caught-up learner is promoted in its own view), while it **shrinks in a single cut that may drop several voters at once**, so long as the retained voters still hold a majority of the old set. *What* the set should be is settled outside the data plane: an external operator (on Kubernetes) reconciles a desired node count — adding nodes as non-voting learners, or removing voters — while the store's leader promotes each caught-up learner on its own, one per view. The store's only job is to install every step safely.
+- signals that indicate a process or connection is not making progress;
+- a numbered view that records replica roles;
+- a configuration change that adds or removes voters.
 
-[[SVG:mem-surrealds-parts]]
+A failure signal can start recovery work. It does not, by itself, rewrite the voter configuration.
 
-The rest of this section is that meaning-three flow — first the roles, then how the set grows and shrinks, and the overlap principle that keeps every change safe.
+### Failure detection
+
+SurrealDS uses several signals when a node, coordinator, or connection stops making progress.
+
+A progress timer can initiate leadership transfer when the current leader is not advancing. If the coordinator handling a transaction becomes unavailable, the transaction protocol can use a backup-coordinator path when the replicated transaction state permits continuation. Network keep-alives identify connections that have stopped responding.
+
+These mechanisms answer different operational questions. A leadership timer concerns the current leader. Coordinator recovery concerns ownership of an in-progress transaction. A keep-alive concerns one network connection.
+
+None of these observations directly removes a replica from the configuration. A replica remains assigned its current role until the view-change path installs another configuration.
+
+A failure signal can still affect when a proposed transition is attempted or completed. For example, the system may wait for a retained replica or learner to reach the state required by the transition.
 
 ### Voters and learners {#surreal-config}
 
-SurrealDS replicas hold two roles. A **voter** is part of the store's quorum — the majority (⌊n/2⌋+1 of the voters) a write requires; an even voter count is run as the next odd size, so the quorum stays a real majority. A **learner** receives data and is catching up but does not vote; it is the staging state a joining node passes through.
+A SurrealDS configuration assigns each replica one of two roles.
 
-The membership is a numbered configuration all nodes agree on. A change is committed through the store's own view-change path — the same path it uses to install a new leader — so a reconfiguration is agreed by a quorum before it takes effect. Learner-to-voter promotion is automatic, performed by the leader as each learner catches up.
+A **voter** participates in quorum decisions. For a configuration with *n* voters, a majority contains `floor(n/2) + 1` voters.
+
+A **learner** receives replicated state but is not counted in the voting quorum. The learner role provides a staging period for a joining replica before it participates in decisions.
+
+Configurations belong to numbered views. A role change becomes active when the corresponding view is installed through the view-change path.
+
+On Kubernetes, an external operator reconciles the requested node count. It can introduce a node as a learner or request removal of existing voters. Learner promotion is handled after the learner has reached the required replicated state.
 
 [[SVG:mem-membership-kinds]]
 
 ### Adding voters {#surreal-add}
 
-Growth is the easy direction, because nobody is ever dropped — no committed write can lose its holders. The only care needed is that a new voter has actually caught up before it counts.
+SurrealDS adds a new replica in two stages.
 
-- A node **joins as a learner**. It receives data and catches up but does not vote, so the voting set — and every quorum size — is unchanged. The store keeps its fault tolerance the whole time, and adding a node can never reduce it.
-- Once the leader confirms the learner is caught up, it **promotes it to voter — one promotion per view.** The set grows 3 → 4 → 5 one at a time, so each new quorum overlaps the last, exactly as [quorum intersection](#membership-vs-consensus) required earlier: a single-voter step is safe when **q_old + q_new > |V_new|**, which holds at every step.
+1. **Join as a learner.** The replica is added without a vote and starts receiving state.
+2. **Promote through a later view.** After the leader determines that the learner meets the catch-up requirement, it proposes a view in which that learner is a voter.
+
+The design promotes one learner in each view change. A sequence such as three voters to five voters is represented as `3 → 4 → 5`, not as one direct promotion of two learners.
+
+For one added voter, the old configuration is a subset of the new configuration. A majority of the old set and a majority of the new set intersect. This is the relevant set-overlap property for that step. The implementation still applies its catch-up, proposal, view-installation, and consensus checks before the new role takes effect.
 
 [[WIDGET:mem-reconfig]]
 
-### What makes a shrink safe {#surreal-overlap}
+### The retained-set check {#surreal-overlap}
 
-Adding never risks data, because nobody is dropped. Removal is the direction that needs a rule, and it rests on one fact — the same [quorum-intersection](#membership-vs-consensus) property from before, now turned toward reconfiguration: **any two majorities of the same set share at least one member.** A write is committed once a *majority* of the voters have durably stored it, so if the voters you keep after a change are themselves a majority of the old set, they must overlap the majority that holds any committed write — at least one kept replica still has it, and nothing committed can vanish.
+Removing voters requires the transition to account for values that may have been stored by an old-config quorum.
+
+SurrealDS applies a retained-set condition. For an old configuration with `n_old` voters, the retained set must contain at least:
+
+`floor(n_old / 2) + 1`
+
+voters.
+
+This condition means that the retained set is itself a majority of the old configuration. Any majority of one configuration intersects every other majority of that same configuration. The retained set therefore has at least one member in common with any old majority.
 
 [[SVG:mem-two-majorities]]
 
-You never get to know *which* majority holds a given write, so the rule has to hold for the worst case: the replicas you drop might be exactly the ones that held it.
+This establishes a quorum-overlap property for the old and retained sets. It is one condition used by the transition; the complete behavior also depends on the view-change and replication protocol that installs the new configuration.
 
 ### Removing voters {#surreal-remove}
 
-That worst case gives the whole rule for a shrink:
+A proposed shrink passes the retained-set check only when:
 
-> A shrink is safe only when the retained voters are still a majority of the old set — **retained ≥ ⌊n_old/2⌋+1**.
+> **retained voters ≥ floor(n_old / 2) + 1**
 
-Take a five-voter store. Removing two keeps three, and three is still a majority of five — so any committed write, which lives on some majority of the old five, must have a holder among the three that remain. Drop one more, down to two, and the retained set is no longer a majority: the three replicas you dropped could have been exactly the ones holding a committed write, orphaning it, so that cut is refused. It is the same overlap principle, now bounding a shrink. The widget places a committed write **W** on a worst-case majority and lets you try each cut:
+For an old configuration of five voters, retaining three meets the condition because three is a majority of five. Retaining two does not meet it.
+
+The check is based on the old configuration, not only on the quorum size of the proposed new configuration. The replicas being removed could include members of an old quorum that stored a previous value. Requiring the retained set to be an old-config majority provides the intersection described above.
+
+The widget places a value on one possible old majority and shows which proposed retained sets meet the condition:
 
 [[WIDGET:mem-shrink]]
 
-## Recap {#recap}
+The additions and removals are deliberately asymmetric in this design. Learners are promoted one at a time after catch-up. A removal request may name several voters, but the resulting retained set must pass the old-configuration majority check before the new view is installed.
 
-The main points, one per item:
-
-- **"Membership" refers to three things** — a soft liveness view, an agreed ordered history, and a safety-critical voter set — with different consistency requirements; the third, the voter set, is what the literature precisely calls *configuration* / *reconfiguration*, not membership.
-- **Slow and dead are indistinguishable** from within the system; FLP states this formally, and a timeout only selects which error to favor.
-- **Safety is violated at a specific moment and cannot be repaired; liveness cannot be violated by any finite prefix** — so protocols preserve safety unconditionally and regain progress later.
-- **Quorum intersection** is the mechanism under consensus, and it holds only over one agreed member set — which is why routing a soft view directly into quorum decisions causes split brain.
-- **All-to-all heartbeats cost n²; gossip disseminates the same information at 3n**, reaching all nodes in about log n rounds.
-- **SWIM separates detection from dissemination**: probe one peer per period (round-robin over a reshuffled list), use k indirect probes, and piggyback verdicts on existing packets.
-- **Suspicion and incarnation numbers** give a suspected node a chance to refute, and only a node may increment its own incarnation.
-- **memberlist runs three loops** — probe 1 s, gossip 200 ms, push/pull 30 s over TCP — and Serf adds events, leave intents, and Lamport-clocked ordering.
-- **Lifeguard adds local health awareness**: a self-health multiplier that lengthens a degraded node's own timeouts, suspicion timeouts that shorten under independent confirmation, and direct notification of a suspected node.
-- **Rapid produces one consistent view**: K observers per node, watermark tallies that batch changes and defer unstable nodes, and a leaderless three-quarters vote.
-- **Changing the voter set is itself a consensus decision** — *reconfiguration*, which the Raft vernacular calls a membership change: a naive switch can open two disjoint majorities, so the change must preserve quorum intersection. Raft does it in the log (joint consensus, or one-at-a-time changes); Matchmaker Paxos does it in an external registry — and reconfiguration is where the subtle safety bugs live.
-- **SurrealDS reaches membership through the last two meanings**: an agreed, versioned sequence of configurations (meaning two) whose current entry is the quorum voter set (meaning three) — grown one voter per view as learners catch up, and shrunk in a single cut that retains a majority of the old set, all through its own view-change path, with the node count reconciled by an external operator. It has a liveness signal (meaning one) but keeps it off the membership path: no replica is dropped for merely looking dead.
-
-Across all of these, the recurring structure is a step, between soft detection and acted-upon configuration, that turns individual observations into an agreed decision.
-
-SurrealDS keeps a simple membership flow today; as we build out our distributed transactional store, the harder questions these papers raise — consistent views at scale, safe reconfiguration, recovery after failure — are the ones we're working through. We'll write up what we learn as it takes shape. More to come.
+We will share more details as we scale SurrealDS on how these algorithms perform. Thank you for the read.
 
 ## References {#references}
 
@@ -390,10 +466,12 @@ SurrealDS keeps a simple membership flow today; as we build out our distributed 
 - [The φ Accrual Failure Detector](https://doi.org/10.1109/RELDIS.2004.1353004) — Hayashibara, Défago, Yared, Katayama. SRDS 2004. Suspicion as a level, not a boolean.
 - [Fireflies: Scalable Support for Intrusion-Tolerant Network Overlays](https://www.cs.cornell.edu/home/rvr/papers/Fireflies.pdf) — Johansen, Allavena, van Renesse. EuroSys 2006. Membership when members can lie.
 - [Census: Location-Aware Membership Management for Large-Scale Distributed Systems](https://www.usenix.org/conference/usenix-09/census-location-aware-membership-management-large-scale-distributed-systems) — Cowling, Ports, Liskov, Popa, Gaikwad. USENIX ATC 2009. Consistent, epoch-based views at scale.
-- [In Search of an Understandable Consensus Algorithm (Raft)](https://raft.github.io/raft.pdf) — Ongaro & Ousterhout. USENIX ATC 2014. §6 (and dissertation §4) cover cluster membership changes: joint consensus and single-server changes. The single-server scheme's [safety fix](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J) followed in 2015.
+- [In Search of an Understandable Consensus Algorithm (Raft)](https://raft.github.io/raft.pdf) — Ongaro & Ousterhout. USENIX ATC 2014. §6 — titled "Cluster membership changes," though its body names the object a *configuration* — covers joint consensus and single-server changes; [the dissertation's](https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf) ch. 4 repeats the split ("Arbitrary configuration changes using joint consensus"). The single-server scheme's [safety fix](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J) followed in 2015.
 - [Matchmaker Paxos: A Reconfigurable Consensus Protocol](https://www.jsys.org/bibliography/2021-09-3-whittakerSolution.html) — Whittaker et al. JSys 2021 ([PDF](https://mwhittaker.github.io/publications/matchmaker_paxos.pdf)). Config authority in a set of matchmakers, off the steady-state path; a reconfiguration in one round trip.
 - [Reconfiguring a State Machine](https://lamport.azurewebsites.net/pubs/reconfiguration-tutorial.pdf) — Lamport, Malkhi, Zhou. SIGACT News 2010. The taxonomy of the reconfiguration design space (in the log vs stop-and-restart vs external master), and where group-communication view change fits.
-- [Vertical Paxos and Primary-Backup Replication](https://lamport.azurewebsites.net/pubs/vertical-paxos.pdf) — Lamport, Malkhi, Zhou. PODC 2009. Reconfiguration via an external configuration master — the origin of the externalized-registry idea Matchmaker builds on.
+- [Vertical Paxos and Primary-Backup Replication](https://lamport.azurewebsites.net/pubs/vertical-paxos.pdf) — Lamport, Malkhi, Zhou. PODC 2009. Reconfiguration via an "auxiliary configuration master" — the origin of the externalized-registry idea Matchmaker builds on.
+- [Implementing Fault-Tolerant Services Using the State Machine Approach](https://www.cs.cornell.edu/fbs/publications/smsurvey.pdf) — Schneider. ACM Computing Surveys 1990. The SMR tutorial; its §7 already names replica addition and removal "Reconfiguration," two decades before Raft.
+- [Paxos Made Simple](https://lamport.azurewebsites.net/pubs/paxos-simple.pdf) — Lamport. 2001. The set of servers as part of the state, changed by ordinary commands — "an arbitrarily sophisticated reconfiguration algorithm."
 - [Viewstamped Replication Revisited](http://pmg.csail.mit.edu/papers/vr-revisited.pdf) — Liskov, Cowling. MIT-CSAIL-TR 2012. The view/epoch-change machinery that leader-based reconfiguration descends from.
 
 ### The code
@@ -409,9 +487,10 @@ SurrealDS keeps a simple membership flow today; as we build out our distributed 
 - [Brewer's Conjecture and the Feasibility of Consistent, Available, Partition-Tolerant Web Services](https://www.comp.nus.edu.sg/~gilbert/pubs/BrewersConjecture-SigAct.pdf) — Gilbert, Lynch. 2002. CAP, formalized.
 - [Unreliable Failure Detectors for Reliable Distributed Systems](https://dl.acm.org/doi/10.1145/226643.226647) — Chandra, Toueg. JACM 1996. The theory of detectors that are allowed to be wrong.
 - [On the Impossibility of Group Membership](https://dl.acm.org/doi/10.1145/248052.248120) — Chandra, Hadzilacos, Toueg, Charron-Bost. PODC 1996. Why consistent views can't be free.
-- [Group Communication Specifications: A Comprehensive Study](https://dl.acm.org/doi/10.1145/503112.503113) — Chockler, Keidar, Vitenberg. ACM Computing Surveys 2001. The canonical definition of a membership service — "the dual of a failure detector" — which scopes "membership" to views of live processes, distinct from the *reconfiguration* of a voter set.
+- [Group Communication Specifications: A Comprehensive Study](https://dl.acm.org/doi/10.1145/503112.503113) — Chockler, Keidar, Vitenberg. ACM Computing Surveys 2001. The canonical specification of a membership service — "a listing of the currently active and connected processes," delivered as views — including the proof that *precise* membership is as strong as an eventually perfect failure detector (◇P), and the concession that an adversarial network can force any membership service into "inconsistent decisions that do not correctly reflect the network situation."
+- [A History of the Virtual Synchrony Replication Model](https://www.cs.cornell.edu/ken/History.pdf) — Birman. 2010. Membership views in virtual synchrony, joins and suspected-crash removals — and the observation that modern Paxos's voter set is "a dynamically tracked notion of membership (also called a view)," the correspondence that lets one word straddle both problems.
 
-### Approachable companions
+### Good reads
 
 - [brianstorti.com/swim](https://www.brianstorti.com/swim/) — a friendly prose walkthrough of SWIM.
 - [CASSANDRA-9667](https://issues.apache.org/jira/browse/CASSANDRA-9667) — "strongly consistent membership and ownership": a proposal to make Cassandra's membership and ownership linearizable, motivated by uncoordinated gossip-based joins selecting overlapping token ranges.

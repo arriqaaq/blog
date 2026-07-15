@@ -1,28 +1,25 @@
 /**
- * MEM Three Views (dst-kit) — one cluster seen through the three things "membership" means.
+ * MEM Two Views (dst-kit) — one cluster seen through membership's two meanings.
  *
- * Same seven nodes, three lenses:
- *   • lens 1 — the SOFT LIVENESS VIEW: per-observer booleans that flicker every tick, disagree
- *     between observers, and cost nothing when wrong (failure detection: SWIM-land);
- *   • lens 2 — the AGREED VIEW SEQUENCE: an append-only chain v1 → v2 → … that only advances
- *     when the observers' verdicts agree; same order everywhere (group membership service);
- *   • lens 3 — the QUORUM CONFIGURATION: the tiny replica set majorities are computed from;
- *     it changes rarely, atomically, and only via the agreed sequence.
- * Crash a replica and watch the same fact ripple through the layers at three different speeds
- * and three different consistency levels. Exposes window.MEMThreeViews.init(id).
+ * Same seven nodes, two layers:
+ *   • view 1 — the SOFT LIVENESS VIEW: per-observer booleans that flicker every tick,
+ *     disagree between observers, and cost nothing when wrong (failure detection: SWIM-land);
+ *   • view 2 — the AGREED VIEW SEQUENCE: an append-only chain v1 → v2 → … that only
+ *     advances when the observers' verdicts agree; same order everywhere (group membership service).
+ * Crash a node and watch the same fact ripple through the two layers at different speeds
+ * and different consistency levels. Exposes window.MEMTwoViews.init(id).
  */
 (function () {
   'use strict';
-  if (typeof anime === 'undefined' || !anime.animate) { console.error('mem-three-views: anime v4 required'); return; }
-  if (!window.DSTKit) { console.error('mem-three-views: dst-kit required'); return; }
+  if (typeof anime === 'undefined' || !anime.animate) { console.error('mem-two-views: anime v4 required'); return; }
+  if (!window.DSTKit) { console.error('mem-two-views: dst-kit required'); return; }
   const { animate } = anime;
   const K = window.DSTKit;
 
-  const W = 780, H = 330, N = 7;
-  const CL = { cx: 145, cy: 176, r: 96 };
+  const W = 780, H = 230, N = 7;
+  const CL = { cx: 150, cy: 122, r: 80 };
   const P1 = { x: 300, y: 20, w: 460, h: 92 };
-  const P2 = { x: 300, y: 122, w: 460, h: 92 };
-  const P3 = { x: 300, y: 224, w: 460, h: 92 };
+  const P2 = { x: 300, y: 120, w: 460, h: 92 };
 
   function init(containerId) {
     const root = document.getElementById(containerId); if (!root) return;
@@ -33,8 +30,7 @@
       obs: [{ dead: new Set(), lag: {} }, { dead: new Set(), lag: {} }],
       flick: [new Set(), new Set()], prevCells: null,
       views: [{ n: 1, members: [0, 1, 2, 3, 4, 5, 6], note: '7 nodes' }],
-      cfg: [0, 1, 2], cfgPending: null,
-      softFlips: 0, cfgChanges: 0, busy: false, playing: false, speed: 1,
+      softFlips: 0, busy: false, playing: false, speed: 1,
     });
     let st = fresh();
     let svg, content, anim, logBody, c;
@@ -54,8 +50,7 @@
         <button class="dstk-btn dstk-btn--ghost t-pause" disabled>⏸</button></div>
         <span class="dstk-tdiv"></span>
         <div class="dstk-tgroup">
-        <button class="dstk-btn dstk-btn--red t-crashr">💥 crash a replica</button>
-        <button class="dstk-btn dstk-btn--amber t-crashn">💥 crash a non-replica</button>
+        <button class="dstk-btn dstk-btn--red t-crash">💥 crash a node</button>
         <button class="dstk-btn dstk-btn--ghost t-reset">↺ Reset</button></div>
         <span class="dstk-sp"></span>
         <div class="dstk-tgroup"><span class="dstk-tlabel">seed</span>
@@ -66,12 +61,13 @@
 
     function build() {
       root.innerHTML = K.container({
-        title: 'One cluster, three membership lenses', sub: 'soft view · agreed views · quorum config',
+        title: 'One cluster, two membership views', sub: 'soft liveness view · agreed view sequence',
         controls: controls(), viewBox: `0 0 ${W} ${H}`, uid,
-        stats: [{ id: 'tick', label: 'tick' }, { id: 'flips', label: 'soft flips' }, { id: 'views', label: 'views' }, { id: 'cfg', label: 'config changes' }],
+        stats: [{ id: 'tick', label: 'tick' }, { id: 'flips', label: 'soft flips' }, { id: 'views', label: 'views' }],
         cap: 'The soft view (top) changes every tick and the two observers briefly disagree — that is fine, nothing '
-           + 'safety-critical reads it raw. The agreed sequence (middle) advances only when the verdicts agree. The '
-           + 'replica config (bottom) moves last, atomically. Crash a non-replica: lenses 1 and 2 react, lens 3 never does.',
+           + 'safety-critical reads it raw. The agreed view sequence (bottom) advances only when both observers concur '
+           + 'on a removal, and every node sees the same order. Crash a node: the soft view reacts at once, while the '
+           + 'sequence advances a single step.',
       });
       c = K.palette();
       svg = root.querySelector('.dstk-svg');
@@ -79,7 +75,7 @@
       anim = svg.querySelector('.anim');
       logBody = root.querySelector('.dstk-log-body');
       drawScene(); bind(); render();
-      K.addLog(logBody, '🌱 press Play, then crash a replica — same fact, three speeds, three consistency levels', 'hl');
+      K.addLog(logBody, '🌱 press Play, then crash a node — watch the soft view flicker, then the sequence advance once', 'hl');
     }
 
     function panel(p, zone, title, sub) {
@@ -91,15 +87,14 @@
     function drawScene() {
       content.innerHTML = '';
       // cluster
-      K.el('text', { x: CL.cx, y: 26, 'text-anchor': 'middle', fill: c.muted, 'font-size': 10.5, 'font-weight': 700 }, content).textContent = 'the actual cluster';
+      K.el('text', { x: CL.cx, y: 16, 'text-anchor': 'middle', fill: c.muted, 'font-size': 10.5, 'font-weight': 700 }, content).textContent = 'the actual cluster';
       for (let i = 0; i < N; i++) {
         const p = nodePos(i);
         K.el('circle', { id: `${uid}-n-${i}`, cx: p.x, cy: p.y, r: 17, fill: K.grad(uid, 'green'), stroke: c.green, 'stroke-width': 2 }, content);
         K.el('text', { id: `${uid}-nl-${i}`, x: p.x, y: p.y + 4, 'text-anchor': 'middle', fill: c.text, 'font-size': 10.5, 'font-weight': 700 }, content).textContent = 'n' + i;
       }
-      panel(P1, 'blue', 'lens 1 — soft liveness view', 'weak · per-observer · changes every tick');
-      panel(P2, 'green', 'lens 2 — agreed view sequence', 'strong · ordered · append-only');
-      panel(P3, 'red', 'lens 3 — quorum configuration', 'strong · tiny · safety-critical');
+      panel(P1, 'blue', 'soft liveness view', 'weak · per-observer · changes every tick');
+      panel(P2, 'green', 'agreed view sequence', 'strong · ordered · append-only');
       // observer row labels + cell grid group
       K.el('text', { x: P1.x + 12, y: P1.y + 42, fill: c.muted, 'font-size': 9 }, content).textContent = 'obs A';
       K.el('text', { x: P1.x + 12, y: P1.y + 66, fill: c.muted, 'font-size': 9 }, content).textContent = 'obs B';
@@ -107,17 +102,15 @@
         K.el('text', { x: P1.x + 62 + i * 34, y: P1.y + 84, 'text-anchor': 'middle', fill: c.muted, 'font-size': 8 }, content).textContent = 'n' + i;
       K.el('g', { id: `${uid}-cells` }, content);
       K.el('g', { id: `${uid}-vchips` }, content);
-      K.el('g', { id: `${uid}-cfgchip` }, content);
-      redrawCluster(); redrawCells(); redrawViews(); redrawCfg();
+      redrawCluster(); redrawCells(); redrawViews();
     }
 
     function redrawCluster() {
       for (let i = 0; i < N; i++) {
         const e = E('n-' + i); if (!e) continue;
-        const inCfg = st.cfg.includes(i);
-        e.setAttribute('stroke', st.alive[i] ? (inCfg ? c.red : c.green) : c.gray);
-        e.setAttribute('fill', st.alive[i] ? K.grad(uid, inCfg ? 'red' : 'green') : K.grad(uid, 'gray'));
-        e.setAttribute('stroke-width', inCfg ? 3 : 2);
+        e.setAttribute('stroke', st.alive[i] ? c.green : c.gray);
+        e.setAttribute('fill', st.alive[i] ? K.grad(uid, 'green') : K.grad(uid, 'gray'));
+        e.setAttribute('stroke-width', 2);
         const l = E('nl-' + i); if (l) l.textContent = st.alive[i] ? 'n' + i : '✗';
       }
     }
@@ -161,27 +154,15 @@
       });
     }
 
-    function redrawCfg() {
-      const g = E('cfgchip'); g.innerHTML = '';
-      const x = P3.x + 14, y = P3.y + 34;
-      K.el('rect', { id: `${uid}-cfgrect`, x, y, width: 240, height: 34, rx: 7, fill: K.grad(uid, 'red'), stroke: c.red, 'stroke-width': 2 }, g);
-      K.el('text', { x: x + 120, y: y + 21, 'text-anchor': 'middle', fill: c.text, 'font-size': 11.5, 'font-weight': 700 }, g)
-        .textContent = 'replicas { ' + st.cfg.map((i) => 'n' + i).join(', ') + ' }';
-      K.el('text', { x: x + 256, y: y + 21, fill: c.muted, 'font-size': 9 }, g)
-        .textContent = st.cfgPending != null ? 'change committing…' : 'majorities = 2 of 3, from THIS set';
-    }
-
-    function crash(kind) {
+    function crash() {
       if (st.busy) return;
-      const pool = kind === 'replica'
-        ? st.cfg.filter((i) => st.alive[i])
-        : [0, 1, 2, 3, 4, 5, 6].filter((i) => st.alive[i] && !st.cfg.includes(i));
-      if (!pool.length) { K.addLog(logBody, 'nothing left to crash there', 'warn'); return; }
+      const pool = [0, 1, 2, 3, 4, 5, 6].filter((i) => st.alive[i]);
+      if (!pool.length) { K.addLog(logBody, 'nothing left to crash', 'warn'); return; }
       const i = pool[Math.floor(st.rng() * pool.length)];
-      st.alive[i] = false; st.crashedAt = st.crashedAt || []; st.crashedAt[i] = st.tick;
+      st.alive[i] = false; st.crashedAt[i] = st.tick;
       st.obs.forEach((o) => { o.lag[i] = 1 + Math.floor(st.rng() * 4); });
       redrawCluster();
-      K.addLog(logBody, `💥 n${i} crashed (${kind}) — observers will notice at their own pace`, 'err');
+      K.addLog(logBody, `💥 n${i} crashed — observers will notice at their own pace`, 'err');
     }
 
     function step() {
@@ -206,24 +187,13 @@
       if (gone != null) {
         st.views.push({ n: st.views.length + 1, members: cur.filter((i) => i !== gone), note: '− n' + gone });
         K.addLog(logBody, `view v${st.views.length} agreed: n${gone} removed — same sequence everywhere`, 'ok');
-        if (st.cfg.includes(gone) && st.cfgPending == null) st.cfgPending = gone;
       }
-      // config: one tick after the view lands, swap the dead replica atomically
-      else if (st.cfgPending != null) {
-        const dead = st.cfgPending;
-        const members = st.views[st.views.length - 1].members;
-        const sub = members.find((i) => !st.cfg.includes(i) && st.alive[i]);
-        st.cfg = st.cfg.map((i) => (i === dead ? sub : i)).filter((i) => i != null);
-        st.cfgPending = null; st.cfgChanges++;
-        K.addLog(logBody, `config change committed: n${dead} → n${sub} — one atomic step, via the agreed sequence`, 'ok');
-        const r = E('cfgrect'); if (r) animate(r, { opacity: [0.3, 1], duration: dur(500), ease: 'out(2)' });
-      }
-      redrawCluster(); redrawCells(); redrawViews(); redrawCfg(); render();
+      redrawCluster(); redrawCells(); redrawViews(); render();
       st.busy = false;
     }
 
     function stat(k, v) { const e = root.querySelector('#' + CSS.escape(uid + '-stat-' + k)); if (e) e.textContent = v; }
-    function render() { stat('tick', st.tick); stat('flips', st.softFlips); stat('views', st.views.length); stat('cfg', st.cfgChanges); }
+    function render() { stat('tick', st.tick); stat('flips', st.softFlips); stat('views', st.views.length); }
 
     async function play() {
       if (st.playing) return; st.playing = true; pp();
@@ -235,15 +205,14 @@
       const sp = st.speed;
       st = fresh(parseInt(root.querySelector('.t-seed').value, 10) || 11); st.speed = sp;
       pp(); drawScene(); render();
-      K.addLog(logBody, `↺ reset — seed ${st.seed}, all seven up, replicas {n0,n1,n2}`, 'hl');
+      K.addLog(logBody, `↺ reset — seed ${st.seed}, all seven nodes up`, 'hl');
     }
 
     function bind() {
       root.querySelector('.t-step').onclick = () => { if (!st.playing) step(); };
       root.querySelector('.t-play').onclick = play;
       root.querySelector('.t-pause').onclick = pause;
-      root.querySelector('.t-crashr').onclick = () => crash('replica');
-      root.querySelector('.t-crashn').onclick = () => crash('non-replica');
+      root.querySelector('.t-crash').onclick = () => crash();
       root.querySelector('.t-reset').onclick = () => { st.playing = false; reset(); };
       root.querySelector('.t-speed').onchange = (e) => st.speed = parseFloat(e.target.value);
       root.querySelector('.t-seed').onchange = () => { st.playing = false; reset(); };
@@ -252,5 +221,5 @@
     new MutationObserver((m) => { for (const x of m) if (x.attributeName === 'data-mode') build(); })
       .observe(document.documentElement, { attributes: true });
   }
-  window.MEMThreeViews = { init };
+  window.MEMTwoViews = { init };
 })();
