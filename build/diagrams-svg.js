@@ -245,7 +245,7 @@ module.exports = {
       `<text x="500" y="156" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.72">catching up</text>` +
       arrow(500, 120, 500, 106, 'green') +
       label(560, 141, 'leader promotes', 'start', 0.62) +
-      box(330, 182, 340, 40, C.amber, 'operator → reload cluster config', ['add / remove nodes · one change per view']) +
+      box(330, 182, 340, 40, C.amber, 'operator → reload cluster config', ['add or remove nodes — one direction per reload']) +
       arrow(500, 182, 500, 168, 'amber') +
       arrow(288, 122, 328, 90, 'green') +
       label(500, 240, 'voters make the quorum · learners stage a join · consecutive views overlap', 'middle', 0.58)),
@@ -265,14 +265,52 @@ module.exports = {
       label(360, 186, 'contrast: a naive C_old → C_new jump leaves a window where disjoint majorities each decide', 'middle', 0.5)),
   },
 
+  'mem-matchmaker': {
+    title: 'Matchmaker Paxos communication (after the frankenpaxos visualization)',
+    type: 'svg',
+    body: svg('0 0 720 330', (() => {
+      const dot = (cx, cy, col, lbl) =>
+        `<circle cx="${cx}" cy="${cy}" r="16" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="2"/>` +
+        `<text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="11" font-weight="700" fill="${isNeon(col) ? INK : 'currentColor'}">${lbl}</text>`;
+      const cliX = 80, ldrX = 250, mmX = 430, accX = 610;
+      const CLI = [108, 158, 208], LDR = [133, 183], MM = [108, 158, 208];
+      const C0 = [70, 108, 146], C1 = [196, 234, 272];
+      const lx = ldrX, ly = LDR[0]; // the active leader drives the round
+      let s = '';
+      // edges from the active leader, drawn behind the (opaque) matchmaker nodes
+      s += arrow(cliX + 16, CLI[0], ldrX - 16, ly, 'gray');
+      MM.forEach((y) => { s += arrow(lx + 16, ly, mmX - 16, y, 'pink'); });
+      C0.forEach((y) => { s += arrow(lx + 16, ly - 3, accX - 16, y, 'blue'); });
+      C1.forEach((y) => { s += arrow(lx + 16, ly + 5, accX - 16, y, 'green'); });
+      // nodes (on top of edges)
+      CLI.forEach((y, i) => { s += dot(cliX, y, C.gray, 'c' + (i + 1)); });
+      LDR.forEach((y, i) => { s += dot(ldrX, y, C.amber, 'l' + (i + 1)); });
+      MM.forEach((y, i) => { s += dot(mmX, y, C.purple, 'm' + (i + 1)); });
+      C0.forEach((y, i) => { s += dot(accX, y, C.blue, 'a' + (i + 1)); });
+      C1.forEach((y, i) => { s += dot(accX, y, C.green, 'a' + (i + 4)); });
+      // column headers + config labels
+      s += label(cliX, 34, 'Clients', 'middle', 0.62);
+      s += label(ldrX, 34, 'Leaders', 'middle', 0.62);
+      s += label(mmX, 34, 'Matchmakers', 'middle', 0.62);
+      s += label(accX, 34, 'Acceptors', 'middle', 0.62);
+      s += label(accX + 24, 112, 'C₀', 'start', 0.62);
+      s += label(accX + 24, 238, 'C₁', 'start', 0.62);
+      // legend
+      s += `<line x1="40" y1="314" x2="66" y2="314" stroke="${C.pink}" stroke-width="2.6"/>` + label(72, 318, 'matchmaking', 'start', 0.72);
+      s += `<line x1="210" y1="314" x2="236" y2="314" stroke="${C.blue}" stroke-width="2.6"/>` + label(242, 318, 'Phase 1 · recover from C₀', 'start', 0.72);
+      s += `<line x1="480" y1="314" x2="506" y2="314" stroke="${C.green}" stroke-width="2.6"/>` + label(512, 318, 'Phase 2 · commit to C₁', 'start', 0.72);
+      return s;
+    })()),
+  },
+
   'mem-surrealds-parts': {
-    title: 'SurrealDS uses all three meanings',
+    title: 'SurrealDS, read against the three meanings',
     type: 'svg',
     body: svg('0 0 720 264',
-      box(40, 20, 640, 58, C.blue, 'Meaning 1 · the liveness view', ['compute-node heartbeats (soft); the store view-change timers handle', 'leader failover and recovery — deliberately not wired to membership']) +
-      box(40, 96, 640, 58, C.purple, 'Meaning 2 · the agreed sequence', ['every change is one store transaction / view-change step, so the store', 'serializes them all — its transactions are the agreement box']) +
-      box(40, 172, 640, 58, C.red, 'Meaning 3 · the quorum configuration', ['the replica voter set (voters + learners), changed by the single-server', 'overlap rule — an external operator decides what the set should be']) +
-      label(360, 252, 'the liveness view never decides the voter set — an operator does, and the store only installs each change safely', 'middle', 0.6)),
+      box(40, 20, 640, 58, C.blue, 'Meaning 1 · the liveness view', ['QUIC keep-alive + a view-change timer + a coordinator probe (soft, local);', 'triggers leader failover and recovery — deliberately off the member path']) +
+      box(40, 96, 640, 58, C.purple, 'Meaning 2 · the agreed sequence', ['a numbered view / config sequence every node converges on through the', 'view change (DoViewChange → StartView) — the view change is the agreement box']) +
+      box(40, 172, 640, 58, C.red, 'Meaning 3 · the quorum configuration', ['the voter set (voters + learners), reconfigured through that same view', 'change — grow one voter per view, shrink while a majority is retained']) +
+      label(360, 252, 'the liveness view never decides the voter set — an external operator reconciles the node count, and the store only installs each change safely', 'middle', 0.58)),
   },
 
   'mem-two-majorities': {

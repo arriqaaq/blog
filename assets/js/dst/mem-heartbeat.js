@@ -2,7 +2,7 @@
  * MEM Heartbeat (dst-kit) — membership as plain rows in a transactional store.
  *
  * The simplest correct architecture on the whole map, and the one our store uses: every
- * compute node upserts a heartbeat row (node-id → { heartbeat, archived? }) into the shared
+ * compute node upserts a heartbeat row (/!nd<uuid> → { heartbeat, archived? }) into the shared
  * transactional KV store every 3s. Any node may run the expiry sweep: rows whose heartbeat is
  * >30s stale get archived; a later cleanup pass deletes the dead node's resources (its live
  * queries) and finally the row itself. A task lease — a compare-and-set with an expiry — elects
@@ -110,7 +110,7 @@
         const y = ROWY(i++);
         const zone = r.status === 'archived' ? 'red' : zoneOf(id);
         K.el('rect', { id: `${uid}-row-${id}`, x: STORE.x + 14, y, width: STORE.w - 28, height: 46, rx: 8, fill: K.grad(uid, zone), stroke: r.status === 'archived' ? c.red : c[zoneOf(id)], 'stroke-width': 1.4 }, g);
-        K.el('text', { x: STORE.x + 28, y: y + 19, fill: c.text, 'font-size': 10.5, 'font-family': "ui-monospace,'SF Mono',monospace", 'font-weight': 700 }, g).textContent = 'node:' + id;
+        K.el('text', { x: STORE.x + 28, y: y + 19, fill: c.text, 'font-size': 10.5, 'font-family': "ui-monospace,'SF Mono',monospace", 'font-weight': 700 }, g).textContent = '/!nd·' + id;
         K.el('text', { x: STORE.x + 28, y: y + 36, fill: c.muted, 'font-size': 9, 'font-variant-numeric': 'tabular-nums' }, g)
           .textContent = `heartbeat t=${r.hb}  ·  ${st.t - r.hb}s ago`;
         const badge = r.status === 'archived' ? 'ARCHIVED (gc=true)' : 'ACTIVE';
@@ -188,7 +188,7 @@
           const r = st.rows[id];
           if (r && r.status === 'archived') {
             r.lqs = 0; r.status = 'gone';
-            K.addLog(logBody, `cleanup: node ${id}'s live queries deleted, node:${id} removed — all in transactions`, 'ok');
+            K.addLog(logBody, `cleanup: node ${id}'s live queries deleted, /!nd·${id} removed — all in transactions`, 'ok');
           }
         }
       }

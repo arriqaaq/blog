@@ -14,7 +14,7 @@ It may have crashed, it may be rebooting, or it may be healthy behind a slow or 
 
 Every distributed system — databases, message queues, orchestrators — needs a continuously updated answer to one question: **who else is here right now?** That answer is **cluster membership**, and this post describes how systems compute it.
 
-The protocols here span four decades and very different designs. We walk through them to learn how membership is handled as a system scales — the trade-offs, the failure modes, and the techniques the field has settled on. We take them in the order of the three meanings this post is about — the soft liveness view, the agreed sequence, the voter set — and [close](#surrealdb) with SurrealDS, SurrealDB's distributed transactional store, as a case study in how one system uses all three.
+The protocols here span four decades and very different designs. We walk through them to learn how membership is handled as a system scales — the trade-offs, the failure modes, and the techniques the field has settled on. We take them in the order of the three meanings this post is about — the soft liveness view, the agreed sequence, the voter set — and [close](#surrealdb) with SurrealDS, SurrealDB's distributed transactional store, read against all three.
 
 Before a system can keep that answer current, it has to get past one stubborn difficulty.
 
@@ -160,11 +160,9 @@ Each protocol below answers "who else is here?", but sits at a different point o
 
 **[ZooKeeper](https://zookeeper.apache.org/) and [etcd](https://etcd.io/).** A different route to the second meaning: no gossip — the member list is held as data in a small, strongly-consistent external store that nodes watch.
 
-**Raft conf-change and [Matchmaker Paxos](https://www.jsys.org/bibliography/2021-09-3-whittakerSolution.html) (2021).** The reconfiguration category: protocols for changing the third meaning — the voter set itself — without breaking quorum intersection during the change. (This is delicate: a simplified membership-change scheme proposed for Raft was [later found unsafe by other researchers and corrected by Raft's author](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J).) Raft's changes are the meaning-three deep-dive [below](#raft-reconfig); Matchmaker is further reading.
+**Raft conf-change and [Matchmaker Paxos](https://www.jsys.org/bibliography/2021-09-3-whittakerSolution.html) (2021).** The reconfiguration category: protocols for changing the third meaning — the voter set itself — without breaking quorum intersection during the change. (This is delicate: a simplified membership-change scheme proposed for Raft was [later found unsafe by other researchers and corrected by Raft's author](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J).) Both are covered in the meaning-three deep-dive [below](#raft-reconfig) — Raft placing the change in the log, Matchmaker in an external registry.
 
-Laid out in time, the papers look like a relay — each fixing a limitation of the last. Laid out by *design*, they are points in a many-dimensional space, and two that appear to disagree often just sit on different axes: Raft and Matchmaker are near-twins, while Rapid and Matchmaker barely touch. Before asking which of two "membership papers" is better, it is worth checking which axes they even share. Pick any two:
-
-[[WIDGET:mem-axes]]
+Laid out in time, the papers look like a relay — each fixing a limitation of the last. Laid out by *design*, they are points in a many-dimensional space, and two that appear to disagree often just sit on different axes: Raft and Matchmaker are near-twins, while Rapid and Matchmaker barely touch. Before asking which of two "membership papers" is better, it is worth checking which axes they even share.
 
 > Recap: all-to-all heartbeats cost too much; gossip made dissemination cheap; SWIM made detection cheap; memberlist and Serf packaged it as a library and agent; Lifeguard added local health awareness; Rapid added strong consistency.
 
@@ -280,7 +278,9 @@ Joins use the same pipeline — a joiner obtains **K temporary observers** throu
 
 The strictest tier is the [third meaning](#what-is-membership): the exact set of replicas a write's majority is counted from. A wrong guess here is not a performance cost but a correctness one — orphaned or conflicting commits — so the set can never be a soft view. It has to be an agreed configuration, and *changing* it is itself a consensus decision.
 
-## Changing the voter set safely: Raft reconfiguration {#raft-reconfig}
+A note on names, because the vocabulary bites hardest here. The rigorous literature does not call this "membership" at all. There, **membership** is the failure-detector notion behind the first two meanings — an agreed, ordered sequence of *views* of who seems up, what [one survey](https://dl.acm.org/doi/10.1145/503112.503113) calls "the dual of a failure detector" — and it is defined so that a node leaves a view only once it has genuinely failed. The voter set is a different object: the papers name it a **configuration**, and its change **reconfiguration**. The two even conflict, because reconfiguration routinely removes *healthy* voters — to shrink or rebalance — which membership's "removed means it crashed" rule forbids. The word attached to voter sets mostly because [Raft's §6 is titled "cluster membership changes"](https://raft.github.io/raft.pdf), and the vernacular stuck. This post still counts it as a third meaning because that overload is exactly the trap it is warning about — but what the rest of this section describes is *reconfiguration*: a consensus problem, not a failure-detection one.
+
+## Changing the voter set safely: reconfiguration {#raft-reconfig}
 
 Consensus assumes a fixed set of voters ([What consensus does not provide](#membership-vs-consensus)). Real clusters are not fixed — machines are added, replaced, and retired — so the voter set has to change while the system keeps committing. The danger is precisely the [split brain](#membership-vs-consensus) from before, now opened by the *change itself* rather than by a failure detector.
 
@@ -294,25 +294,33 @@ Consensus assumes a fixed set of voters ([What consensus does not provide](#memb
 
 [[SVG:mem-raft-joint]]
 
-**Single-server changes.** Raft's simpler option: add or remove exactly **one** voter at a time. A one-member difference is enough on its own — any majority of *C_old* and any majority of *C_new* must share a member, because two sets differing by a single element cannot have disjoint majorities. No joint phase is needed; a larger change is just taken one step at a time. This is the rule the [next section](#surrealdb) shows SurrealDS using.
+**Single-server changes.** Raft's simpler option: add or remove exactly **one** voter at a time. A one-member difference is enough on its own — any majority of *C_old* and any majority of *C_new* must share a member, because two sets differing by a single element cannot have disjoint majorities. No joint phase is needed; a larger change is just taken one step at a time.
 
-**Even the simple rule is subtle.** The single-server scheme as first published turned out to have a safety bug, [found in 2015 by researchers formally verifying Raft's reconfiguration](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J): a newly elected leader could append a *further* configuration change before it had committed anything in its current term, which can destroy the guarantee that a single voter sits in both the quorum that committed an entry and the quorum that elects the next leader — the guarantee the safety proof rests on. Raft's author confirmed it and added one constraint: *a leader may not append a new configuration entry until it has committed an entry from its current term.* Joint consensus was never affected. The lesson matches the rest of this post — reconfiguration is where the delicate correctness bugs live, even when the rule looks obviously safe.
+**Even the simple rule is subtle.** The single-server scheme as first published turned out to have a safety bug, [found in 2015 by Huanchen Zhang and Brandon Amos while formalizing Raft's reconfiguration by hand](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J): a newly elected leader could append a *further* configuration change before it had committed anything in its current term, which can destroy the guarantee that a single voter sits in both the quorum that committed an entry and the quorum that elects the next leader — the guarantee the safety proof rests on. Raft's author confirmed it and added one constraint: *a leader may not append a new configuration entry until it has committed an entry from its current term.* Joint consensus was never affected. The lesson matches the rest of this post — reconfiguration is where the delicate correctness bugs live, even when the rule looks obviously safe.
 
-> Recap: changing the voter set can itself cause split brain if an old and a new majority go disjoint; Raft closes the window either with joint consensus (a decision needs both majorities) or with one-at-a-time changes (consecutive majorities always overlap) — and even the one-at-a-time rule needed a correctness fix.
+**Where the agreement step lives.** Raft keeps the configuration *in the log* — a config change is an ordinary entry, ordered with the commands around it. That is one point in a wider space, the same "where does agreement happen?" question this post keeps circling. [Viewstamped Replication](http://pmg.csail.mit.edu/papers/vr-revisited.pdf) commits the change in its log too, but performs the cutover as an *epoch change* — a view change to a new membership. [Lamport, Malkhi and Zhou](https://lamport.azurewebsites.net/pubs/reconfiguration-tutorial.pdf) survey the rest: you can instead *stop* the old configuration cleanly and start a fresh one, or lift the decision out of the data path entirely.
+
+**Matchmaker Paxos.** That last route is [Matchmaker Paxos](https://mwhittaker.github.io/publications/matchmaker_paxos.pdf) (Whittaker et al., 2021), the modern form of [Vertical Paxos](https://lamport.azurewebsites.net/pubs/vertical-paxos.pdf). Rather than thread the configuration through the log, it hands config authority to a small auxiliary set of **matchmakers** that record which configuration each round uses. To move to a new configuration at round *i*, the leader does two things at a matchmaker quorum in a single round trip: it **registers** the new configuration for all rounds ≥ *i*, and **reads back** every configuration used in rounds < *i*. Those prior configurations name exactly the replica sets that might already hold a chosen value, so the leader recovers each — reading a quorum of it — before proceeding. Same quorum-intersection guarantee, relocated off the acceptors: they never learn a change happened, steady state pays nothing, and a reconfiguration costs one extra round trip.
+
+[[SVG:mem-matchmaker]]
+
+Raft (in the log) and Matchmaker (in an external registry) are two placements of the same step; underneath, the safety argument is quorum intersection every time.
+
+> Recap: changing the voter set can itself cause split brain if an old and a new majority go disjoint; the fix is to preserve quorum intersection across the change — Raft does it in the log (joint consensus needs both majorities; one-at-a-time changes keep consecutive majorities overlapping), Matchmaker Paxos in an external registry — and even Raft's one-at-a-time rule needed a correctness fix.
 
 ## Membership in SurrealDS {#surrealdb}
 
-**SurrealDS** is SurrealDB's distributed transactional store. SurrealDB uses it as a storage backend: each node runs a transaction coordinator alongside a local replica, and an interactive SQL transaction is driven by the coordinator against a set of SurrealDS replicas. It makes a good closing case because it is not a single protocol but a **system** — and it uses all three meanings of membership, at two layers.
+**SurrealDS** is SurrealDB's distributed transactional store. SurrealDB uses it as a storage backend: each node runs a transaction coordinator alongside a local replica, and an interactive SQL transaction is driven by the coordinator against a set of SurrealDS replicas. Read against the [three meanings](#what-is-membership), its membership sits squarely in the last two — and, unlike everything else in this post, it reaches them without leaning on the first.
 
-**The compute layer: membership as rows in the store (meaning one, made agreed by meaning two).** SurrealDB's compute nodes do not gossip. Each upserts a heartbeat row into the shared transactional store every few seconds; any node may run a sweep that archives rows gone stale and later deletes them. There is no quorum math up here — because every change is one store transaction, the store *serializes* them, so the store's own transactions are the agreement box. Liveness stays soft (a missed heartbeat), but the record of who is a member is as consistent as any other row.
+**Meaning one, the liveness view — present, but off the membership path.** SurrealDS has liveness machinery: a view-change timer carries a stalled view change through to a new leader, and a coordinator probe recovers a transaction whose coordinator has died. But unlike the gossip detectors earlier in this post, none of that ever edits the member set. A replica is never dropped because it *looks* dead — it leaves only when the configuration says so. If anything, liveness only *blocks* a change: a shrink waits while a retained voter is still unhealthy, rather than evicting it.
 
-[[WIDGET:mem-heartbeat]]
+**Meaning two, the agreed sequence — the member set is a numbered configuration.** Every node moves through the same ordered sequence of views. A membership change is committed through the store's own view-change path — the same path it uses to install a new leader — so it is agreed by a quorum before it takes effect.
 
-**The store layer: the replica voter set (meaning three).** The store itself is replicated, and its replicas form the quorum that makes a write durable. That set is the safety-critical configuration from the [section above](#raft-reconfig): a write is durable once a majority of an agreed set of replicas has accepted it, so the store cannot let two nodes hold different ideas of that set. The member set is a **versioned view**, changed one step at a time — Raft's single-server rule — so consecutive views' quorums always overlap. The decision of *what* the set should be comes from outside the data plane: an external operator (on Kubernetes) reconciles a desired node count, and the store's only job is to install each change safely.
+**Meaning three, the quorum configuration — the voter set.** That configuration is the set of replicas a write's majority is counted against, so the store cannot let two nodes hold different ideas of it. SurrealDS changes it through the same view-change path as everything else — [reconfiguration](#raft-reconfig) folded into a view — always preserving [quorum intersection](#membership-vs-consensus), so consecutive views' quorums overlap and no committed write is orphaned. The two directions are not symmetric: the set **grows one voter at a time** (each caught-up learner is promoted in its own view), while it **shrinks in a single cut that may drop several voters at once**, so long as the retained voters still hold a majority of the old set. *What* the set should be is settled outside the data plane: an external operator (on Kubernetes) reconciles a desired node count — adding nodes as non-voting learners, or removing voters — while the store's leader promotes each caught-up learner on its own, one per view. The store's only job is to install every step safely.
 
 [[SVG:mem-surrealds-parts]]
 
-What follows is that store-layer flow — first the roles, then how the set grows and shrinks, and the overlap principle that keeps every change safe.
+The rest of this section is that meaning-three flow — first the roles, then how the set grows and shrinks, and the overlap principle that keeps every change safe.
 
 ### Voters and learners {#surreal-config}
 
@@ -345,7 +353,7 @@ That worst case gives the whole rule for a shrink:
 
 > A shrink is safe only when the retained voters are still a majority of the old set — **retained ≥ ⌊n_old/2⌋+1**.
 
-Take a five-voter store. Removing two keeps three, and three is still a majority of five — so any committed write, which lives on some majority of the old five, must have a holder among the three that remain. Drop one more, down to two, and the retained set is no longer a majority: the three replicas you dropped could have been exactly the ones holding a committed write, orphaning it, so that cut is refused. It is the addition rule run in reverse. The widget places a committed write **W** on a worst-case majority and lets you try each cut:
+Take a five-voter store. Removing two keeps three, and three is still a majority of five — so any committed write, which lives on some majority of the old five, must have a holder among the three that remain. Drop one more, down to two, and the retained set is no longer a majority: the three replicas you dropped could have been exactly the ones holding a committed write, orphaning it, so that cut is refused. It is the same overlap principle, now bounding a shrink. The widget places a committed write **W** on a worst-case majority and lets you try each cut:
 
 [[WIDGET:mem-shrink]]
 
@@ -353,7 +361,7 @@ Take a five-voter store. Removing two keeps three, and three is still a majority
 
 The main points, one per item:
 
-- **"Membership" refers to three things** — a soft liveness view, an agreed ordered history, and a safety-critical voter set — with different consistency requirements.
+- **"Membership" refers to three things** — a soft liveness view, an agreed ordered history, and a safety-critical voter set — with different consistency requirements; the third, the voter set, is what the literature precisely calls *configuration* / *reconfiguration*, not membership.
 - **Slow and dead are indistinguishable** from within the system; FLP states this formally, and a timeout only selects which error to favor.
 - **Safety is violated at a specific moment and cannot be repaired; liveness cannot be violated by any finite prefix** — so protocols preserve safety unconditionally and regain progress later.
 - **Quorum intersection** is the mechanism under consensus, and it holds only over one agreed member set — which is why routing a soft view directly into quorum decisions causes split brain.
@@ -363,8 +371,8 @@ The main points, one per item:
 - **memberlist runs three loops** — probe 1 s, gossip 200 ms, push/pull 30 s over TCP — and Serf adds events, leave intents, and Lamport-clocked ordering.
 - **Lifeguard adds local health awareness**: a self-health multiplier that lengthens a degraded node's own timeouts, suspicion timeouts that shorten under independent confirmation, and direct notification of a suspected node.
 - **Rapid produces one consistent view**: K observers per node, watermark tallies that batch changes and defer unstable nodes, and a leaderless three-quarters vote.
-- **Changing the voter set is itself a consensus decision**: a naive switch can open two disjoint majorities, so Raft uses either joint consensus (a decision needs a majority of *both* the old and the new set) or one-at-a-time changes (consecutive majorities always overlap) — and reconfiguration is where the subtle safety bugs live.
-- **SurrealDS shows all three meanings in one system**: SurrealDB's compute nodes track their membership as rows in the store (whose transactions are the agreement box), while the store's own replica set is a safety-critical voter configuration — grown and shrunk by Raft's single-server overlap rule, and decided by an external operator.
+- **Changing the voter set is itself a consensus decision** — *reconfiguration*, which the Raft vernacular calls a membership change: a naive switch can open two disjoint majorities, so the change must preserve quorum intersection. Raft does it in the log (joint consensus, or one-at-a-time changes); Matchmaker Paxos does it in an external registry — and reconfiguration is where the subtle safety bugs live.
+- **SurrealDS reaches membership through the last two meanings**: an agreed, versioned sequence of configurations (meaning two) whose current entry is the quorum voter set (meaning three) — grown one voter per view as learners catch up, and shrunk in a single cut that retains a majority of the old set, all through its own view-change path, with the node count reconciled by an external operator. It has a liveness signal (meaning one) but keeps it off the membership path: no replica is dropped for merely looking dead.
 
 Across all of these, the recurring structure is a step, between soft detection and acted-upon configuration, that turns individual observations into an agreed decision.
 
@@ -383,7 +391,10 @@ SurrealDS keeps a simple membership flow today; as we build out our distributed 
 - [Fireflies: Scalable Support for Intrusion-Tolerant Network Overlays](https://www.cs.cornell.edu/home/rvr/papers/Fireflies.pdf) — Johansen, Allavena, van Renesse. EuroSys 2006. Membership when members can lie.
 - [Census: Location-Aware Membership Management for Large-Scale Distributed Systems](https://www.usenix.org/conference/usenix-09/census-location-aware-membership-management-large-scale-distributed-systems) — Cowling, Ports, Liskov, Popa, Gaikwad. USENIX ATC 2009. Consistent, epoch-based views at scale.
 - [In Search of an Understandable Consensus Algorithm (Raft)](https://raft.github.io/raft.pdf) — Ongaro & Ousterhout. USENIX ATC 2014. §6 (and dissertation §4) cover cluster membership changes: joint consensus and single-server changes. The single-server scheme's [safety fix](https://groups.google.com/g/raft-dev/c/t4xj6dJTP6E/m/d2D9LrWRza8J) followed in 2015.
-- [Matchmaker Paxos: A Reconfigurable Consensus Protocol](https://www.jsys.org/bibliography/2021-09-3-whittakerSolution.html) — Whittaker et al. JSys 2021. The reconfiguration corner of the map.
+- [Matchmaker Paxos: A Reconfigurable Consensus Protocol](https://www.jsys.org/bibliography/2021-09-3-whittakerSolution.html) — Whittaker et al. JSys 2021 ([PDF](https://mwhittaker.github.io/publications/matchmaker_paxos.pdf)). Config authority in a set of matchmakers, off the steady-state path; a reconfiguration in one round trip.
+- [Reconfiguring a State Machine](https://lamport.azurewebsites.net/pubs/reconfiguration-tutorial.pdf) — Lamport, Malkhi, Zhou. SIGACT News 2010. The taxonomy of the reconfiguration design space (in the log vs stop-and-restart vs external master), and where group-communication view change fits.
+- [Vertical Paxos and Primary-Backup Replication](https://lamport.azurewebsites.net/pubs/vertical-paxos.pdf) — Lamport, Malkhi, Zhou. PODC 2009. Reconfiguration via an external configuration master — the origin of the externalized-registry idea Matchmaker builds on.
+- [Viewstamped Replication Revisited](http://pmg.csail.mit.edu/papers/vr-revisited.pdf) — Liskov, Cowling. MIT-CSAIL-TR 2012. The view/epoch-change machinery that leader-based reconfiguration descends from.
 
 ### The code
 
@@ -398,6 +409,7 @@ SurrealDS keeps a simple membership flow today; as we build out our distributed 
 - [Brewer's Conjecture and the Feasibility of Consistent, Available, Partition-Tolerant Web Services](https://www.comp.nus.edu.sg/~gilbert/pubs/BrewersConjecture-SigAct.pdf) — Gilbert, Lynch. 2002. CAP, formalized.
 - [Unreliable Failure Detectors for Reliable Distributed Systems](https://dl.acm.org/doi/10.1145/226643.226647) — Chandra, Toueg. JACM 1996. The theory of detectors that are allowed to be wrong.
 - [On the Impossibility of Group Membership](https://dl.acm.org/doi/10.1145/248052.248120) — Chandra, Hadzilacos, Toueg, Charron-Bost. PODC 1996. Why consistent views can't be free.
+- [Group Communication Specifications: A Comprehensive Study](https://dl.acm.org/doi/10.1145/503112.503113) — Chockler, Keidar, Vitenberg. ACM Computing Surveys 2001. The canonical definition of a membership service — "the dual of a failure detector" — which scopes "membership" to views of live processes, distinct from the *reconfiguration* of a voter set.
 
 ### Approachable companions
 

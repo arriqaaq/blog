@@ -32,7 +32,6 @@
   "mem-agreement-box": { "g": "MEMAgreementBox", "t": "The agreement box", "s": "where the agreement step can live" },
   "mem-rapid-rings": { "g": "MEMRapidRings", "t": "Rapid: K observers and a batched cut", "s": "multi-observer, multi-process, then a ¾ vote" },
   "mem-matchmaker": { "g": "MEMMatchmaker", "t": "Matchmaker: reconfigure off the critical path", "s": "new round, new config, commands keep flowing" },
-  "mem-axes": { "g": "MEMAxes", "t": "The design-space explorer", "s": "pick two systems, count shared coordinates" },
   "mem-heartbeat": { "g": "MEMHeartbeat", "t": "Membership as rows in a transactional store", "s": "the store's transactions serialize every change" },
   "mem-slow-or-dead": { "g": "MEMSlowOrDead", "t": "Telling slow from dead", "s": "a slow node and a dead node present the same silence" },
   "mem-safety-liveness": { "g": "MEMSafetyLiveness", "t": "Safety and liveness, on a timeline", "s": "violated at a moment versus judged over an unbounded run" },
