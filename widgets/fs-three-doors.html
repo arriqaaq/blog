@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en" data-mode="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DST · Three surfaces, one kernel</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..800&display=swap" rel="stylesheet"><style>
+  :root{color-scheme:light;--bg:#f2f1eb;--fg:#1a1a1a;--muted:#5f6152;--rule:#e0ded3;--neon:#d9f400;--olive:#657220}
+  *{box-sizing:border-box}html,body{background:var(--bg);color:var(--fg)}
+  body{font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;max-width:900px;margin:2.6rem auto;padding:0 1rem;line-height:1.6;-webkit-font-smoothing:antialiased;font-feature-settings:'cv11','ss01'}
+  ::selection{background:var(--neon);color:var(--fg)}
+  h1{font-weight:800;font-size:1.55rem;letter-spacing:-.02em;margin:0 0 .15rem}.sub{color:var(--muted);margin:0 0 1.2rem}.tb{margin-bottom:1rem;display:flex;gap:.5rem;align-items:center}
+  .tb a{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.76rem;cursor:pointer;border:1px solid var(--rule);background:var(--bg);color:var(--olive);border-radius:8px;padding:.35rem .7rem;text-decoration:none}
+  .tb a:hover{background:var(--neon);color:var(--fg);border-color:var(--fg)}</style></head>
+<body><h1>Three surfaces, one kernel</h1><p class="sub">different commit counts, identical roots</p>
+<div class="tb"><a href="../index.html">← all widgets</a></div>
+<div id="dst-w"></div>
+<script src="../assets/vendor/anime.min.js"></script><script src="../assets/js/dst/dst-kit.js"></script><script src="../assets/js/dst/fs-three-doors.js"></script>
+<script>(function(){function go(){if(window.FSThreeDoors)FSThreeDoors.init('dst-w');}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go);else go();})();</script>
+</body></html>

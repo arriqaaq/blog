@@ -132,7 +132,9 @@
       padding:.3rem .55rem; text-align:center; min-width:62px; }
     .dstk-stat-v{ font-family:'JetBrains Mono',ui-monospace,monospace; font-size:.95rem; font-weight:700; font-variant-numeric:tabular-nums; }
     .dstk-stat-l{ font-size:.56rem; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
-    .dstk-log{ flex:1; background:var(--chip); border:1px solid var(--sep); border-radius:6px; padding:.4rem .55rem; min-height:62px; }
+    /* min-width:0 lets this flex item shrink below its content width, which is what makes the
+       rows' text-overflow:ellipsis engage instead of widening the page. */
+    .dstk-log{ flex:1; min-width:0; background:var(--chip); border:1px solid var(--sep); border-radius:6px; padding:.4rem .55rem; min-height:62px; }
     .dstk-log-title{ font-size:.58rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:.2rem; }
     .dstk-log-body{ font-size:.72rem; line-height:1.5; }
     .dstk-log-row{ color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

@@ -40,5 +40,22 @@
   "mem-lifeguard": { "g": "MEMLifeguard", "t": "Lifeguard: local health awareness", "s": "self-health multiplier, dynamic suspicion, buddy notification" },
   "mem-reconfig": { "g": "MEMReconfig", "t": "Growing a voting set safely", "s": "join as a learner, get promoted, one change per view" },
   "mem-raft-reconfig": { "g": "MEMRaftReconfig", "t": "Reconfiguring the voter set", "s": "safe only when consecutive majorities must overlap" },
-  "mem-shrink": { "g": "MEMShrink", "t": "Removing voters without losing data", "s": "keep a majority of the old set" }
+  "mem-shrink": { "g": "MEMShrink", "t": "Removing voters without losing data", "s": "keep a majority of the old set" },
+  "fs-syscall-path": { "g": "FSSyscallPath", "t": "What write() actually does", "s": "into the page cache, and not one byte further" },
+  "fs-inode-anatomy": { "g": "FSInodeAnatomy", "t": "Names, inodes, and blocks", "s": "the inode holds everything except the name" },
+  "fs-blocks-extents": { "g": "FSBlocksExtents", "t": "Indirect blocks vs extents", "s": "two ways to find a file's bytes" },
+  "fs-path-walk": { "g": "FSPathWalk", "t": "Resolving a path", "s": "one component at a time, and the cache that saves it" },
+  "fs-fuse-loop": { "g": "FSFuseLoop", "t": "The FUSE round trip", "s": "every operation leaves the kernel and comes back" },
+  "fs-chunks": { "g": "FSChunks", "t": "Content addressing", "s": "a chunk's name is the hash of its bytes" },
+  "fs-path-copy": { "g": "FSPathCopy", "t": "Path copying", "s": "one write rewrites the route, shares everything else" },
+  "fs-equal-roots": { "g": "FSEqualRoots", "t": "Equal state, equal root", "s": "two orders, one digest — and one flipped bit" },
+  "fs-commit-graph": { "g": "FSCommitGraph", "t": "Commits, forks, snapshots, reverts", "s": "names bound to commits — zero bytes moved" },
+  "fs-head-race": { "g": "FSHeadRace", "t": "Expected-head compare-and-swap", "s": "one winner per round, typed conflicts for the rest" },
+  "fs-provenance": { "g": "FSProvenance", "t": "Who wrote this byte?", "s": "one indexed lookup, three record-link hops" },
+  "fs-three-doors": { "g": "FSThreeDoors", "t": "Three surfaces, one kernel", "s": "different commit counts, identical roots" },
+  "skv-one-clock": { "g": "SKVOneClock", "t": "One clock, many branches", "s": "every commit draws from the same counter" },
+  "skv-per-layer-caps": { "g": "SKVPerLayerCaps", "t": "Where the cap is applied", "s": "per layer before the merge, or once after it" },
+  "skv-anchor-policy": { "g": "SKVAnchorPolicy", "t": "What compaction must keep", "s": "place forks, then try each retention policy" },
+  "skv-moving-base": { "g": "SKVMovingBase", "t": "A merge base that moves", "s": "fork_at · source_through · target_at" },
+  "skv-merge-chunks": { "g": "SKVMergeChunks", "t": "Atomic, or merely resumable", "s": "the data decides, so chunks is reported" }
 }
