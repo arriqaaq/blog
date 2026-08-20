@@ -131,7 +131,7 @@
         stats: [{ id: 'emitted', label: 'emitted' }, { id: 'capped', label: 'capped out' },
                 { id: 'leaked', label: 'leaked' }, { id: 'mode', label: 'mode' }],
         cap: 'Step the merge with per-layer caps, then switch to one global filter and step again. The leaked rows '
-           + "are not malformed, misordered, or above the snapshot's own sequence — they are wrong purely because of "
+           + "are well formed, correctly ordered, and below the snapshot's own sequence. They are wrong because of "
            + 'which layer supplied them, and by the time the streams interleave that fact is gone.',
       });
       c = K.palette();
@@ -326,7 +326,7 @@
       root.querySelector('.t-mode').textContent = st.mode === 'per-layer'
         ? '⇄ Switch to one global filter' : '⇄ Switch back to per-layer caps';
       pp(); setLock(false); drawScene(); render();
-      K.addLog(logBody, `↺ reset to seed ${seed} — same keys, same sequences, same leak window`, 'hl');
+      K.addLog(logBody, `↺ reset to seed ${seed} — this seed reproduces the leak window exactly`, 'hl');
     }
 
     function pp() {

@@ -26,6 +26,18 @@ function arrow(x1, y1, x2, y2, name, dash) {
 }
 const label = (x, y, s, anchor, op) => `<text x="${x}" y="${y}" text-anchor="${anchor || 'start'}" font-size="10.5" fill="currentColor" opacity="${op == null ? 0.7 : op}">${s}</text>`;
 
+// The box vocabulary the branching figures share: a faint outline carries context, and `hot`
+// paints the one element a figure is about in neon with ink text. `dash` outlines something the
+// figure shows as absent or shared rather than present.
+function obox(x, y, w, h, t, sub, opts) {
+  const o = opts || {};
+  const ink = o.hot ? INK : 'currentColor';
+  let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${o.hot ? C.purple : 'none'}" stroke="${o.hot ? INK : 'currentColor'}" stroke-width="${o.hot ? 1.7 : 1.2}"${o.hot ? '' : ` opacity="${o.dash ? 0.3 : 0.45}"`}${o.dash ? ' stroke-dasharray="5,4"' : ''}/>`;
+  if (t) s += `<text x="${x + w / 2}" y="${y + (sub ? 21 : h / 2 + 4)}" text-anchor="middle" font-size="11.5" font-weight="700" fill="${ink}" opacity="${o.dash ? 0.55 : 1}">${t}</text>`;
+  if (sub) s += `<text x="${x + w / 2}" y="${y + 37}" text-anchor="middle" font-size="10" fill="${ink}" opacity="${o.hot ? 0.8 : 0.6}">${sub}</text>`;
+  return s;
+}
+
 // SVG <text> does not wrap, so a long prose label silently runs past the viewBox. `wrapText`
 // greedily splits on spaces to fit `maxW` pixels (Inter averages ~0.52em per mixed-case char),
 // and `para` emits one <text> per line, growing downward from y.
@@ -738,32 +750,31 @@ module.exports['fs-fuse-ops'] = {
 module.exports['skv-lsm-anatomy'] = {
   title: 'An LSM tree: buffer in memory, flush sorted runs, merge them later',
   type: 'svg',
-  body: svg('0 0 720 280', (() => {
+  body: svg('0 0 720 150', (() => {
     let o = '';
-    o += label(360, 20, 'One constraint shapes all of it: small random writes are expensive, so never do them.', 'middle', 0.72);
-    o += box(20, 34, 130, 52, C.green, 'write()', ['a key and a value']);
-    o += box(184, 34, 150, 62, C.amber, 'WAL', ['append-only, for crash', 'recovery only']);
-    o += box(184, 104, 150, 62, C.blue, 'memtable', ['arena skiplist,', 'sorted, in memory']);
-    o += arrow(150, 60, 182, 60, 'green');
-    o += arrow(259, 98, 259, 112, 'amber');
-    o += label(344, 90, 'durable first, then visible', 'start', 0.55);
-    o += box(376, 104, 150, 62, C.gray, 'flush', ['when it is full, write it', 'out once, sequentially']);
-    o += arrow(334, 130, 374, 130, 'blue');
-    // levels
-    const lv = [['L0', 'overlapping runs', 190], ['L1', 'non-overlapping', 208], ['L2', 'ten times larger', 226]];
-    let i = 0;
-    for (const [n, note, y] of lv) {
-      o += `<rect x="184" y="${y - 12}" width="342" height="15" rx="3" fill="${fade(C.gray)}" stroke="${C.gray}" stroke-width="1"/>`;
-      o += label(192, y - 1, n, 'start', 0.85);
-      o += label(232, y - 1, note, 'start', 0.55);
-      i++;
+    const pane = (x, y, w, h, t, sub, hot) => {
+      let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${hot ? C.purple : 'none'}" stroke="${hot ? INK : 'currentColor'}" stroke-width="${hot ? 1.7 : 1.2}"${hot ? '' : ' opacity="0.45"'}/>`;
+      s += `<text x="${x + w / 2}" y="${y + (sub ? 21 : h / 2 + 4)}" text-anchor="middle" font-size="11.5" font-weight="700" fill="${hot ? INK : 'currentColor'}">${t}</text>`;
+      if (sub) s += `<text x="${x + w / 2}" y="${y + 36}" text-anchor="middle" font-size="9.5" fill="${hot ? INK : 'currentColor'}" opacity="${hot ? 0.8 : 0.62}">${sub}</text>`;
+      return s;
+    };
+    // the write path: durable log and sorted buffer, then one sequential flush
+    o += pane(20, 56, 96, 44, 'write', null, 0);
+    o += pane(146, 26, 110, 44, 'WAL', 'append-only', 0);
+    o += pane(146, 88, 110, 44, 'memtable', 'sorted, in memory', 0);
+    o += arrow(120, 72, 144, 54, 'gray');
+    o += arrow(120, 84, 144, 102, 'gray');
+    // the levels below
+    for (const [t, sub, y] of [['L0', 'overlapping', 32], ['L1', 'non-overlapping', 62], ['L2', null, 92]]) {
+      o += `<rect x="300" y="${y}" width="250" height="26" rx="4" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.4"/>`;
+      o += `<text x="314" y="${y + 18}" font-size="10.5" font-weight="700" fill="currentColor" opacity="0.85">${t}</text>`;
+      if (sub) o += label(352, y + 18, sub, 'start', 0.55);
     }
-    o += arrow(451, 156, 451, 176, 'gray');
-    o += box(556, 104, 146, 62, C.purple, 'compaction', ['merges runs, and is the', 'only thing that deletes']);
-    o += arrow(629, 168, 629, 196, 'purple');
-    o += `<line x1="629" y1="196" x2="536" y2="196" stroke="${INK}" stroke-width="1.8"/>`;
-    o += arrow(540, 196, 528, 196, 'purple');
-    o += para(360, 254, 'Nothing is ever overwritten in place. A key’s old versions survive until compaction decides they are unreachable — which is the property everything later in this post is built on.', { anchor: 'middle', maxW: 676, op: 0.6 });
+    o += arrow(260, 110, 296, 104, 'gray');
+    o += label(280, 98, 'flush', 'middle', 0.7);
+    // and the one component that merges them back down
+    o += pane(580, 56, 120, 44, 'compaction', 'merges runs', 1);
+    o += arrow(578, 78, 554, 78, 'purple');
     return o;
   })()),
 };
@@ -771,78 +782,78 @@ module.exports['skv-lsm-anatomy'] = {
 module.exports['skv-primitives'] = {
   title: 'The three primitives a branch is built out of',
   type: 'svg',
-  body: svg('0 0 720 340', (() => {
+  body: svg('0 0 720 172', (() => {
     let o = '';
-    // (a) the sequence number
-    o += label(20, 20, '(a)  a sequence number — one monotone integer, drawn per commit, for the whole store', 'start', 0.82);
-    o += `<rect x="20" y="30" width="680" height="26" rx="7" fill="${C.purple}" stroke="${INK}" stroke-width="1.6"/>`;
-    o += `<text x="30" y="47" font-size="11" font-weight="700" fill="${INK}">global commit sequence</text>`;
-    for (let s = 1; s <= 10; s++) {
-      const x = 250 + (s - 1) * 48;
-      o += `<line x1="${x}" y1="30" x2="${x}" y2="56" stroke="${INK}" stroke-width="0.9" opacity="0.45"/>`;
-      o += `<text x="${x + 6}" y="47" font-size="10" fill="${INK}" opacity="0.8">${s}</text>`;
+    const panel = (x, t, sub) => {
+      let s = `<rect x="${x}" y="24" width="213" height="130" rx="9" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.26"/>`;
+      s += `<text x="${x + 106}" y="45" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">${t}</text>`;
+      if (sub) s += label(x + 106, 62, sub, 'middle', 0.6);
+      return s;
+    };
+
+    // (a) the number, and it lives inside the key
+    o += panel(20, 'a sequence number', null);
+    for (const [x, w, t, hot] of [[32, 100, 'user_key', 0], [134, 46, 'seq', 1], [182, 36, 'ts', 0]]) {
+      o += `<rect x="${x}" y="98" width="${w}" height="30" rx="5" fill="${hot ? C.purple : 'none'}" stroke="${hot ? INK : 'currentColor'}" stroke-width="${hot ? 1.6 : 1.1}"${hot ? '' : ' opacity="0.4"'}/>`;
+      o += `<text x="${x + w / 2}" y="117" text-anchor="middle" font-size="10.5" font-weight="${hot ? 700 : 500}" fill="${hot ? INK : 'currentColor'}"${hot ? '' : ' opacity="0.72"'}>${t}</text>`;
     }
-    // (b) the internal key
-    o += label(20, 88, '(b)  visibility is a filter on that integer — and the integer lives inside the key', 'start', 0.82);
-    const seg = [[20, 300, 'user_key', 'the bytes you wrote'], [326, 190, 'trailer : u64 BE', '(seq << 8) | kind'], [522, 178, 'timestamp : u64 BE', 'a selector, not the order']];
-    for (const [x, w, t, sub] of seg) {
-      o += `<rect x="${x}" y="98" width="${w}" height="40" rx="6" fill="${fade(C.blue)}" stroke="${C.blue}" stroke-width="1.4"/>`;
-      o += `<text x="${x + w / 2}" y="115" text-anchor="middle" font-size="11.5" font-weight="700" fill="${C.blue}">${t}</text>`;
-      o += label(x + w / 2, 130, sub, 'middle', 0.66);
+
+    // (b) visibility is a filter on that number
+    o += panel(253, 'visibility', 'a filter on that number');
+    for (const [y, t, vis] of [[80, 's31', 0], [102, 's27', 0], [128, 's14', 1]]) {
+      o += `<rect x="290" y="${y}" width="58" height="18" rx="4" fill="none" stroke="currentColor" stroke-width="1.1" opacity="${vis ? 0.75 : 0.3}"/>`;
+      o += `<text x="319" y="${y + 13}" text-anchor="middle" font-size="10" fill="currentColor" opacity="${vis ? 0.85 : 0.35}">${t}</text>`;
+      if (!vis) o += `<line x1="294" y1="${y + 15}" x2="344" y2="${y + 3}" stroke="currentColor" stroke-width="1" opacity="0.35"/>`;
     }
-    o += box(326, 154, 190, 47, C.purple, '56-bit seq · 8-bit kind', ['Set · Delete · SoftDelete · …']);
-    o += arrow(421, 152, 421, 140, 'purple');
-    o += para(534, 172, 'Ordering: user key ASCENDING, then sequence DESCENDING.', { anchor: 'start', maxW: 166, op: 0.78 });
-    o += para(534, 198, 'Newest version of a key comes first.', { anchor: 'start', maxW: 166, op: 0.55 });
-    // (c) compaction
-    o += label(20, 232, '(c)  exactly one component destroys anything', 'start', 0.82);
-    o += box(20, 242, 150, 62, C.gray, 'a read', ['ignores seq > s.', 'Destroys nothing.']);
-    o += box(196, 242, 150, 62, C.gray, 'a write', ['adds a version.', 'Destroys nothing.']);
-    o += box(372, 242, 170, 62, C.red, 'compaction', ['drops superseded versions.', 'The only destroyer.']);
-    o += box(568, 242, 132, 62, C.green, 'so: ask it', ['to keep more, and', 'the past stays readable']);
-    o += arrow(544, 265, 566, 265, 'red');
-    o += para(360, 314, 'Put (a) and (b) together and “read the store as it was at sequence s” already works — every engine with snapshot isolation does it. The only reason it is not a branch is (c): nothing has promised compaction will keep serving that particular s.', { anchor: 'middle', maxW: 676, op: 0.62 });
+    o += `<rect x="272" y="121" width="136" height="5" rx="2.5" fill="${C.purple}" stroke="${INK}" stroke-width="0.7"/>`;
+    o += label(414, 128, 'cap 19', 'start', 0.75);
+
+    // (c) which of the three removes a version
+    o += panel(487, 'compaction', 'deletes superseded versions');
+    for (const [y, t, hot] of [[78, 'a read', 0], [102, 'a write', 0], [126, 'compaction', 1]]) {
+      o += `<rect x="520" y="${y}" width="148" height="20" rx="5" fill="${hot ? C.purple : 'none'}" stroke="${hot ? INK : 'currentColor'}" stroke-width="${hot ? 1.5 : 1}"${hot ? '' : ' opacity="0.32"'}/>`;
+      o += `<text x="594" y="${y + 14}" text-anchor="middle" font-size="10" font-weight="${hot ? 700 : 400}" fill="${hot ? INK : 'currentColor'}"${hot ? '' : ' opacity="0.5"'}>${t}</text>`;
+    }
     return o;
   })()),
 };
 
 module.exports['skv-checkpoint-vs-fork'] = {
-  title: 'A checkpoint makes a second store; a fork makes a second view of one',
+  title: 'Two stores after a checkpoint, one store and a view after a fork',
   type: 'svg',
-  body: svg('0 0 720 265', (() => {
+  body: svg('0 0 720 176', (() => {
     let o = '';
-    o += label(180, 20, 'a checkpoint', 'middle', 0.9);
-    o += label(540, 20, 'a fork', 'middle', 0.9);
-    o += `<line x1="360" y1="30" x2="360" y2="246" stroke="currentColor" stroke-width="1" opacity="0.25" stroke-dasharray="4,4"/>`;
-    // checkpoint side
-    o += box(24, 34, 148, 62, C.green, 'store A', ['memtable, WAL,', '14 live SSTables']);
-    o += box(196, 34, 148, 62, C.gray, 'store B', ['a copy or hard link of', 'all 14, rebased WAL']);
-    o += arrow(172, 64, 194, 64, 'green');
-    o += label(184, 112, 'cost tracks the live FILE COUNT', 'middle', 0.72);
-    o += label(184, 128, 'no shared future: both sides now', 'middle', 0.6);
-    o += label(184, 141, 'compact, flush and grow separately', 'middle', 0.6);
-    o += label(184, 160, 'no diff · no merge back · whole-store only', 'middle', 0.6);
-    o += `<rect x="24" y="176" width="320" height="26" rx="6" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.3"/>`;
-    o += `<text x="184" y="193" text-anchor="middle" font-size="11" font-weight="600" fill="${C.red}">two stores that used to be equal</text>`;
-    // fork side
-    o += box(384, 34, 148, 62, C.green, 'main', ['keeps its memtable,', 'WAL and SSTables']);
-    o += box(556, 34, 144, 62, C.purple, 'feature', ['owns nothing yet —', 'one catalog record']);
-    o += arrow(554, 64, 534, 64, 'gray');
-    o += label(628, 112, 'reads through main,', 'middle', 0.72);
-    o += label(628, 125, 'capped at the anchor', 'middle', 0.72);
-    o += label(542, 150, 'cost is one metadata record, whatever the store weighs', 'middle', 0.62);
-    o += label(542, 166, 'diff and merge are defined, because both sides share a clock', 'middle', 0.6);
-    o += `<rect x="384" y="176" width="316" height="26" rx="6" fill="${C.purple}" stroke="${INK}" stroke-width="1.3"/>`;
-    o += `<text x="542" y="193" text-anchor="middle" font-size="11" font-weight="700" fill="${INK}">one store, two views of it</text>`;
-    o += para(360, 226, 'The arrow is the whole difference: a fork keeps a read path into its parent, so nothing had to be copied to create it — and the parent can no longer forget whatever that arrow still points at. Everything expensive about branching follows from that second clause.', { anchor: 'middle', maxW: 676, op: 0.6 });
+    o += label(180, 22, 'a checkpoint', 'middle', 0.88);
+    o += label(540, 22, 'a fork', 'middle', 0.88);
+    o += `<line x1="360" y1="32" x2="360" y2="164" stroke="currentColor" stroke-width="1" opacity="0.22" stroke-dasharray="4,4"/>`;
+    // a store: an outlined box with four file bars in it
+    const store = (x, name) => {
+      let s = `<rect x="${x}" y="38" width="150" height="98" rx="9" fill="none" stroke="currentColor" stroke-width="1.3" opacity="0.45"/>`;
+      s += `<text x="${x + 75}" y="58" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">${name}</text>`;
+      for (let i = 0; i < 4; i++) {
+        s += `<rect x="${x + 16}" y="${68 + i * 16}" width="118" height="11" rx="2" fill="currentColor" opacity="0.18"/>`;
+      }
+      return s;
+    };
+    // checkpoint: two whole stores, and no arrow between them
+    o += store(20, 'store A');
+    o += store(190, 'store B');
+    o += label(180, 158, 'fully copied · nothing shared', 'middle', 0.68);
+    // fork: one store, plus a view that points into it
+    o += store(380, 'main');
+    o += `<rect x="560" y="38" width="140" height="34" rx="9" fill="${C.purple}" stroke="${INK}" stroke-width="1.6"/>`;
+    o += `<text x="630" y="60" text-anchor="middle" font-size="11.5" font-weight="700" fill="${INK}">feature</text>`;
+    o += arrow(558, 55, 534, 55, 'purple');
+    o += label(630, 92, 'reads through main', 'middle', 0.7);
+    o += label(540, 158, 'one catalog record · nothing copied', 'middle', 0.68);
     return o;
   })()),
 };
 
 module.exports['skv-ceiling'] = {
-  title: 'A branch is a ceiling on one clock, not a second history',
+  title: 'A branch as a ceiling on the shared commit sequence',
   type: 'svg',
-  body: svg('0 0 720 284', (() => {
+  body: svg('0 0 720 272', (() => {
     let o = '';
     // what it is NOT
     o += label(20, 20, 'what it is not', 'start', 0.85);
@@ -869,13 +880,13 @@ module.exports['skv-ceiling'] = {
     o += `<rect x="${X(25)}" y="214" width="${700 - X(25)}" height="22" rx="4" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.1" stroke-dasharray="4,3"/>`;
     o += `<text x="${(X(25) + 700) / 2}" y="229" text-anchor="middle" font-size="10.5" fill="${C.red}">invisible to the child, permanently</text>`;
     o += label(20, 229, 'the child inherits', 'start', 0.7);
-    o += para(360, 258, 'The child’s own commits draw numbers from the same counter, so they land to the right of 25 — above everything it inherited. That is the entire mechanism behind copy-on-write shadowing: no flags, no shadow table, just arithmetic.', { anchor: 'middle', maxW: 676, op: 0.62 });
+    o += para(360, 258, 'The child’s own commits draw numbers from the same counter, so they land to the right of 25 — above everything it inherited.', { anchor: 'middle', maxW: 676, op: 0.62 });
     return o;
   })()),
 };
 
 module.exports['skv-fork-anchor'] = {
-  title: 'The fork anchor: a number on the parent’s clock, and everything above it invisible forever',
+  title: 'The fork anchor: a number on the parent’s clock, and everything above it invisible',
   type: 'svg',
   body: svg('0 0 720 270', (() => {
     let o = '';
@@ -901,90 +912,54 @@ module.exports['skv-fork-anchor'] = {
     // effective cap for grandchild
     o += `<line x1="${X(25)}" y1="188" x2="${X(25)}" y2="222" stroke="${INK}" stroke-width="1.6" stroke-dasharray="5,4"/>`;
     o += para(20, 232, 'the grandchild’s view of main also caps at 25 — min(33, 25) — never at its own anchor', { maxW: 676, op: 0.72 });
-    o += para(20, 244, 'A snapshot is released when its reader leaves. An anchor is the branch’s definition: it outlives every reader, survives restart, and is what makes the view writable.', { anchor: 'start', maxW: 680, op: 0.6 });
+    o += para(20, 244, 'A snapshot is released when its reader leaves. An anchor is the branch’s definition: it outlives every reader, survives restart, and can be written on top of.', { anchor: 'start', maxW: 680, op: 0.6 });
     return o;
   })()),
 };
 
 module.exports['skv-use-cases'] = {
-  title: 'Four things people want a fork for, and what each one needs to be exact about',
+  title: 'Three things people want a fork for, and what each one needs to be exact about',
   type: 'html',
   body: `<table class="cmp"><thead><tr><th>Use</th><th>Lifetime</th><th>How many live at once</th><th>What it must be exact about</th><th>What you do today instead</th></tr></thead><tbody>
-    <tr><td><b>Agent sandbox</b></td><td>seconds to minutes</td><td>one per task, thrown away</td><td>being <i>undoable</i> — the discard must leave nothing</td><td>copy the directory, or hope</td></tr>
+    <tr><td><b>Agent sandbox</b></td><td>seconds to minutes</td><td>one per task, thrown away</td><td>being <i>undoable</i> — the discard must leave nothing</td><td>copy the directory</td></tr>
     <tr><td><b>Dev / test / preview</b></td><td>hours to days</td><td>tens, concurrently</td><td>being a faithful copy of production data</td><td>restore a dump per environment</td></tr>
-    <tr><td><b>Time travel &amp; audit</b></td><td>as long as the retention policy</td><td>read-only, many</td><td>the <i>point in time</i> — an approximation is useless</td><td>read a backup, or an audit table you wrote yourself</td></tr>
-    <tr><td><b>Multi-tenant copy-on-write</b></td><td>the tenant's lifetime</td><td>thousands</td><td>isolation of cost — one tenant must not bill the others</td><td>a full copy per tenant</td></tr>
+    <tr><td><b>Time travel &amp; audit</b></td><td>as long as the retention policy</td><td>read-only, many</td><td>the exact <i>point in time</i></td><td>read a backup, or an audit table you wrote yourself</td></tr>
     </tbody></table>
-    <p style="font-size:.82rem;opacity:.72;margin:.7rem 0 0">They disagree on everything except one requirement: <b>the cost of creating one must not scale with the size of the store.</b> That single line is the scoring function for every design below — and the lifetime column is what makes <i>many short-lived branches</i> the target rather than a few long-lived release lines.</p>`,
+    <p style="font-size:.82rem;opacity:.72;margin:.7rem 0 0">All three share one requirement: <b>the cost of creating a branch must not scale with the size of the store.</b> Their lifetimes differ, so the target is many short-lived branches rather than a few long-lived release lines.</p>`,
 };
 
 module.exports['skv-options'] = {
   title: 'Four ways to build a branch on an LSM tree, and where each one puts the cost',
   type: 'html',
-  body: `<table class="cmp"><thead><tr><th>Approach</th><th>What a fork writes</th><th>What it does to compaction</th><th>Why not this</th></tr></thead><tbody>
-    <tr><td><b>Put the branch id in every key</b></td><td>nothing</td><td>every branch's rows interleave in one keyspace, so a compaction job can never be scoped to one branch</td><td>deleting a branch becomes a range delete over live data; a key's version chain is no longer contiguous, which the comparator and the bloom filters both depend on; and a scan at fork depth <i>d</i> becomes <i>d</i> scans</td></tr>
-    <tr><td><b>A separate engine per branch, with a copy</b></td><td>everything</td><td>nothing — each engine is independent</td><td>trivially correct, and it fails the one requirement: cost scales with the data</td></tr>
-    <tr><td><b>Per-branch roots over a content-addressed tree</b></td><td>one root hash</td><td>replaces it — reachability over digests rather than sequence numbers</td><td>sound, and it means <i>replacing</i> the storage engine rather than extending it: MVCC, compaction and crash recovery all have to be re-derived over a new address space</td></tr>
-    <tr><td><b>A ceiling on a shared sequence counter</b><br><small>what this post describes</small></td><td>one metadata record</td><td>all of the difficulty lands here: compaction must be told which superseded versions are still somebody's current</td><td>the cost is real; it is concentrated in one component instead of spread across the key format</td></tr>
-    </tbody></table>
-    <p style="font-size:.82rem;opacity:.72;margin:.7rem 0 0">Read the third column rather than the second. Every one of these is cheap to fork; they differ almost entirely in what they do to the component whose job is to forget things.</p>`,
+  body: `<table class="cmp"><thead><tr><th>Approach</th><th>What a fork writes</th><th>What it does to compaction</th></tr></thead><tbody>
+    <tr><td><b>Put the branch id in every key</b></td><td>nothing</td><td>every branch's rows interleave in one keyspace, so a compaction job can never be scoped to one branch</td></tr>
+    <tr><td><b>A separate engine per branch, with a copy</b></td><td>everything</td><td>nothing — each engine is independent</td></tr>
+    <tr><td><b>Per-branch roots over a content-addressed tree</b></td><td>one root hash</td><td>replaces it — reachability over digests rather than sequence numbers</td></tr>
+    <tr><td><b>A ceiling on a shared sequence counter</b><br><small>what this post describes</small></td><td>one metadata record</td><td>all of the difficulty lands here: compaction must be told which superseded versions are still somebody's current</td></tr>
+    </tbody></table>`,
 };
 
 module.exports['skv-key-vs-metadata'] = {
-  title: 'Where the owner is named — and what one compaction job therefore sees',
+  title: 'Where the owner is named',
   type: 'svg',
-  body: svg('0 0 720 321', (() => {
+  body: svg('0 0 720 200', (() => {
     let o = '';
-    o += label(180, 20, 'as built — the owner rides in component metadata', 'middle', 0.88);
-    o += label(540, 20, 'rejected — the owner is a prefix in every key', 'middle', 0.88);
-    o += `<line x1="360" y1="30" x2="360" y2="274" stroke="currentColor" stroke-width="1" opacity="0.25" stroke-dasharray="4,4"/>`;
-    // left: key layout unchanged
-    o += `<rect x="20" y="36" width="320" height="30" rx="6" fill="${C.purple}" stroke="${INK}" stroke-width="1.5"/>`;
-    o += `<line x1="216" y1="36" x2="216" y2="66" stroke="${INK}" stroke-width="1"/>`;
-    o += `<line x1="280" y1="36" x2="280" y2="66" stroke="${INK}" stroke-width="1"/>`;
-    o += `<text x="118" y="55" text-anchor="middle" font-size="10.5" font-weight="700" fill="${INK}">user_key</text>`;
-    o += `<text x="248" y="55" text-anchor="middle" font-size="9.5" font-weight="700" fill="${INK}">trailer</text>`;
-    o += `<text x="310" y="55" text-anchor="middle" font-size="9.5" font-weight="700" fill="${INK}">ts</text>`;
-    o += label(180, 80, 'byte-for-byte what it was before branching existed', 'middle', 0.62);
-    // components carrying the owner
-    const comps = [['memtable', 20], ['SSTable meta', 128], ['manifest entry', 236]];
-    for (const [n, x] of comps) {
-      o += `<rect x="${x}" y="94" width="104" height="42" rx="7" fill="${fade(C.green)}" stroke="${C.green}" stroke-width="1.4"/>`;
-      o += `<text x="${x + 52}" y="110" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.green}">${n}</text>`;
-      o += `<rect x="${x + 10}" y="116" width="84" height="14" rx="3" fill="${fade(C.amber)}" stroke="${C.amber}" stroke-width="1"/>`;
-      o += `<text x="${x + 52}" y="126" text-anchor="middle" font-size="8.5" fill="${C.amber}">BatchOwner b7·g2</text>`;
+    // the internal key: three fields, and no branch id among them
+    o += label(20, 22, 'the internal key', 'start', 0.85);
+    for (const [x, w, t] of [[20, 380, 'user_key'], [404, 150, 'trailer'], [558, 142, 'timestamp']]) {
+      o += `<rect x="${x}" y="30" width="${w}" height="34" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+      o += `<text x="${x + w / 2}" y="52" text-anchor="middle" font-size="11" font-weight="600" fill="currentColor">${t}</text>`;
     }
-    o += `<rect x="20" y="172" width="320" height="46" rx="7" fill="none" stroke="${C.green}" stroke-width="1.6" stroke-dasharray="6,4"/>`;
-    o += `<text x="180" y="190" text-anchor="middle" font-size="11" font-weight="700" fill="${C.green}">what one compaction job sees</text>`;
-    o += label(180, 206, 'exactly one owner’s rows — by construction', 'middle', 0.66);
-    o += arrow(20, 238, 340, 238, 'green');
-    o += label(180, 256, 'a range scan is one seek, at any fork depth', 'middle', 0.66);
-    // right: prefixed
-    o += `<rect x="380" y="36" width="320" height="30" rx="6" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.5"/>`;
-    o += `<line x1="452" y1="36" x2="452" y2="66" stroke="${C.red}" stroke-width="1"/>`;
-    o += `<line x1="620" y1="36" x2="620" y2="66" stroke="${C.red}" stroke-width="1"/>`;
-    o += `<line x1="662" y1="36" x2="662" y2="66" stroke="${C.red}" stroke-width="1"/>`;
-    o += `<text x="416" y="55" text-anchor="middle" font-size="10" font-weight="700" fill="${C.red}">branch_id</text>`;
-    o += `<text x="536" y="55" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.red}">user_key</text>`;
-    o += `<text x="641" y="55" text-anchor="middle" font-size="9" font-weight="700" fill="${C.red}">trlr</text>`;
-    o += `<text x="681" y="55" text-anchor="middle" font-size="9" font-weight="700" fill="${C.red}">ts</text>`;
-    o += label(540, 80, 'the comparator now carries branch semantics forever', 'middle', 0.62);
-    // interleaved rows
-    const rows = [['b7  user:3  s31', C.blue], ['b2  user:3  s28', C.gray], ['b7  user:4  s24', C.blue], ['b2  user:4  s19', C.gray]];
-    let y = 94;
-    for (const [t, col] of rows) {
-      o += `<rect x="380" y="${y}" width="320" height="16" rx="3" fill="${fade(col)}" stroke="${col}" stroke-width="1"/>`;
-      o += `<text x="390" y="${y + 12}" font-size="9.5" fill="currentColor" opacity="0.8">${t}</text>`;
-      y += 19;
+    o += label(360, 80, 'no branch id anywhere', 'middle', 0.66);
+    // the components: each one stamped with its owner
+    o += label(20, 108, 'component metadata', 'start', 0.85);
+    for (const [x, w, t] of [[20, 210, 'memtable'], [254, 210, 'SSTable meta'], [488, 212, 'manifest']]) {
+      o += `<rect x="${x}" y="116" width="${w}" height="52" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+      o += `<text x="${x + w / 2}" y="134" text-anchor="middle" font-size="11" font-weight="600" fill="currentColor">${t}</text>`;
+      o += `<rect x="${x + w / 2 - 36}" y="142" width="72" height="17" rx="4" fill="${C.purple}" stroke="${INK}" stroke-width="1.2"/>`;
+      o += `<text x="${x + w / 2}" y="155" text-anchor="middle" font-size="10" font-weight="700" fill="${INK}">owner</text>`;
     }
-    o += `<rect x="380" y="172" width="320" height="46" rx="7" fill="none" stroke="${C.red}" stroke-width="1.6" stroke-dasharray="6,4"/>`;
-    o += `<text x="540" y="190" text-anchor="middle" font-size="11" font-weight="700" fill="${C.red}">what one compaction job sees</text>`;
-    o += label(540, 206, 'two branches’ rows — it cannot be scoped to one', 'middle', 0.66);
-    o += arrow(380, 232, 700, 232, 'red');
-    o += arrow(380, 244, 700, 244, 'red');
-    o += arrow(380, 256, 700, 256, 'red');
-    o += label(540, 272, 'a scan at fork depth d is d seeks, one per prefix', 'middle', 0.66);
-    o += para(360, 282, 'The version chain of one user key is contiguous on the left and fragmented on the right. Contiguity is what the newest-first walk, the comparator and the bloom filters are all built on — so prefixing is not slower by a constant, it invalidates the assumption underneath the read path.', { anchor: 'middle', maxW: 676, op: 0.6 });
+    o += label(360, 188, 'branch identity lives here', 'middle', 0.66);
     return o;
   })()),
 };
@@ -1008,23 +983,22 @@ module.exports['skv-key-ownership'] = {
 module.exports['skv-read-stack-anatomy'] = {
   title: 'The read stack: one layer per ancestor, each with its own ceiling',
   type: 'svg',
-  body: svg('0 0 720 358', (() => {
+  body: svg('0 0 720 186', (() => {
     let o = '';
-    o += label(20, 20, 'A snapshot is not one filter over one sorted view. It is a stack, walked nearest-first.', 'start', 0.72);
-    const layers = [
-      [30, C.green, 'own layer  ·  cap = snapshot_seq 31', 'active memtable → immutable, newest first →', 'L0 (key-range filtered) → L1+ (binary search)'],
-      [116, C.blue, 'parent  ·  cap = min(31, 25) = 25', 'the same four places, read at 25 — not at 31'],
-      [202, C.gray, 'grandparent  ·  cap = min(31, 25, 12) = 12', 'active: None — an idle branch has no runtime and no arena'],
-    ];
-    for (const [y, col, title, ...subs] of layers) {
-      o += box(20, y, 430, 46 + 15 * subs.length, col, title, subs);
+    o += label(20, 22, 'walked nearest-first', 'start', 0.85);
+    const rows = [['own', null, 'cap 31', 32], ['parent', 'anchor 25', 'cap 25', 82], ['grandparent', 'anchor 33', 'cap 25', 132]];
+    for (const [name, anchor, cap, y] of rows) {
+      o += `<rect x="20" y="${y}" width="250" height="38" rx="7" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+      o += `<text x="145" y="${y + 24}" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">${name}</text>`;
+      if (anchor) {
+        o += `<rect x="300" y="${y + 6}" width="130" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.4"/>`;
+        o += `<text x="365" y="${y + 24}" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.78">${anchor}</text>`;
+      }
+      o += `<rect x="460" y="${y + 4}" width="120" height="30" rx="6" fill="${C.purple}" stroke="${INK}" stroke-width="1.6"/>`;
+      o += `<text x="520" y="${y + 24}" text-anchor="middle" font-size="11.5" font-weight="700" fill="${INK}">${cap}</text>`;
+      if (y < 132) o += arrow(520, y + 36, 520, y + 52, 'purple');
     }
-    o += arrow(235, 102, 235, 114, 'green');
-    o += arrow(235, 188, 235, 200, 'blue');
-    o += box(482, 96, 218, 137, C.purple, 'cap narrows monotonically', ['walking the parent chain', 'nearest-first:', 'cap = cap.min(fork_seq)', '', 'so a grandchild can never see', 'more of its grandparent', 'than its parent could']);
-    o += arrow(478, 151, 454, 151, 'gray', true);
-    o += para(360, 288, 'The first visible version wins, and the walk stops there. A tombstone in a nearer layer hides every farther layer — a delete answers “absent”, it does not abstain and let an ancestor answer. Rows sitting above a layer’s cap are physically present on disk and unreadable through that layer.', { anchor: 'middle', maxW: 676, op: 0.62 });
-    o += para(360, 332, 'Read amplification therefore tracks fork depth: d layers each contribute their own live components into one merge. MAX_VIEW_DEPTH = 64 bounds it.', { anchor: 'middle', maxW: 676, op: 0.55 });
+    o += label(520, 180, 'narrows, never widens', 'middle', 0.66);
     return o;
   })()),
 };
@@ -1032,149 +1006,127 @@ module.exports['skv-read-stack-anatomy'] = {
 module.exports['skv-cap-before-merge'] = {
   title: 'Why the cap is applied per layer, upstream of the k-way merge',
   type: 'svg',
-  body: svg('0 0 720 297', (() => {
+  body: svg('0 0 720 198', (() => {
     let o = '';
-    o += label(20, 20, 'Each layer’s iterators are wrapped BEFORE the merge. A single filter on the merged stream cannot express per-layer caps.', 'start', 0.74);
-    // as built
-    o += label(20, 46, 'as built', 'start', 0.85);
-    const src = [[56, C.green, 'own · cap 31', 'user:4 s29'], [104, C.blue, 'parent · cap 19', 'user:4 s27'], [152, C.gray, 'grandpa · cap 11', 'user:4 s8']];
-    for (const [y, col, cap, row] of src) {
-      o += `<rect x="20" y="${y}" width="150" height="34" rx="6" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="1.4"/>`;
-      o += `<text x="30" y="${y + 14}" font-size="9.5" font-weight="700" fill="${strokeFor(col)}">${cap}</text>`;
-      o += label(30, y + 27, row, 'start', 0.7);
-      // gate
-      o += `<rect x="188" y="${y + 6}" width="52" height="22" rx="5" fill="${C.purple}" stroke="${INK}" stroke-width="1.3"/>`;
-      o += `<text x="214" y="${y + 21}" text-anchor="middle" font-size="9.5" font-weight="700" fill="${INK}">≤ cap</text>`;
-      o += arrow(172, y + 17, 186, y + 17, 'gray');
-      o += arrow(242, y + 17, 262, y + 17, 'gray');
-    }
-    o += `<rect x="264" y="56" width="46" height="130" rx="7" fill="${fade(C.gray)}" stroke="${C.gray}" stroke-width="1.4"/>`;
-    o += `<text x="287" y="112" text-anchor="middle" font-size="10" font-weight="700" fill="${C.gray}">k-way</text>`;
-    o += `<text x="287" y="126" text-anchor="middle" font-size="10" font-weight="700" fill="${C.gray}">merge</text>`;
-    o += arrow(312, 121, 330, 121, 'gray');
-    o += `<rect x="332" y="98" width="116" height="46" rx="6" fill="${fade(C.green)}" stroke="${C.green}" stroke-width="1.4"/>`;
-    o += `<text x="390" y="116" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.green}">user:4 → s8</text>`;
-    o += label(390, 132, 'correct for this reader', 'middle', 0.66);
-    // rejected
-    o += label(474, 46, 'one global filter instead', 'start', 0.85);
-    for (const [y, col, cap, row] of src) {
-      o += `<rect x="474" y="${y}" width="96" height="34" rx="6" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="1.4"/>`;
-      o += `<text x="482" y="${y + 14}" font-size="9" font-weight="700" fill="${strokeFor(col)}">${cap}</text>`;
-      o += label(482, y + 27, row, 'start', 0.7);
-      o += arrow(572, y + 17, 586, y + 17, 'gray');
-    }
-    o += `<rect x="588" y="56" width="34" height="130" rx="7" fill="${fade(C.gray)}" stroke="${C.gray}" stroke-width="1.4"/>`;
-    o += `<text x="605" y="115" text-anchor="middle" font-size="9" font-weight="700" fill="${C.gray}">merge</text>`;
-    o += `<rect x="632" y="98" width="42" height="24" rx="5" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.3"/>`;
-    o += `<text x="653" y="114" text-anchor="middle" font-size="9.5" font-weight="700" fill="${C.red}">≤ 31</text>`;
-    o += arrow(622, 110, 630, 110, 'gray');
-    o += `<rect x="600" y="146" width="100" height="40" rx="6" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.6"/>`;
-    o += `<text x="650" y="163" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.red}">user:4 → s27</text>`;
-    o += label(650, 178, 'never visible to anyone', 'middle', 0.7);
-    o += para(360, 216, 'The leaked row is well formed, correctly ordered, and below the snapshot’s own sequence — 27 ≤ 31. It is wrong only because of which layer supplied it, and by the time the streams are interleaved that information is gone.', { anchor: 'middle', maxW: 676, op: 0.62 });
-    o += para(360, 258, 'The ordering is what makes it subtle: within a key, versions arrive sequence-DESCENDING. A capped iterator walks a key’s above-cap versions down to its visible one; a post-merge filter has already let another layer’s row win the key before the filter is ever consulted.', { anchor: 'middle', maxW: 676, op: 0.55 });
+    o += label(180, 22, 'cap before the merge — the row the reader may see', 'middle', 0.88);
+    o += label(540, 22, 'cap after the merge — a row from another layer', 'middle', 0.88);
+    o += `<line x1="360" y1="30" x2="360" y2="190" stroke="currentColor" stroke-width="1" opacity="0.22" stroke-dasharray="4,4"/>`;
+    // the three source layers, identical on both sides
+    const layers = [['own ≤31', 0], ['parent ≤19', 1], ['grandpa ≤11', 2]];
+    const lane = (x0) => {
+      let s = '';
+      for (const [t, i] of layers) {
+        const x = x0 + i * 106;
+        s += `<rect x="${x}" y="32" width="100" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.45"/>`;
+        s += `<text x="${x + 50}" y="49" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.8">${t}</text>`;
+      }
+      return s;
+    };
+    const merge = (x, y) => {
+      let s = `<rect x="${x}" y="${y}" width="160" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.5"/>`;
+      s += `<text x="${x + 80}" y="${y + 18}" text-anchor="middle" font-size="10.5" font-weight="600" fill="currentColor">k-way merge</text>`;
+      return s;
+    };
+    // left: one cap per layer, upstream of the merge
+    o += lane(24);
+    for (const [, i] of layers) o += `<rect x="${24 + i * 106}" y="78" width="100" height="16" rx="4" fill="${C.purple}" stroke="${INK}" stroke-width="1.3"/>`;
+    o += `<text x="180" y="90" text-anchor="middle" font-size="10" font-weight="700" fill="${INK}">≤ cap</text>`;
+    o += merge(100, 114);
+    for (const [, i] of layers) o += arrow(74 + i * 106, 60, 74 + i * 106, 76, 'gray');
+    for (const [, i] of layers) o += arrow(74 + i * 106, 96, 180 + (i - 1) * 50, 112, 'gray');
+    o += arrow(180, 142, 180, 158, 'gray');
+    o += `<rect x="100" y="160" width="160" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="1.4" opacity="0.7"/>`;
+    o += `<text x="180" y="178" text-anchor="middle" font-size="10.5" font-weight="700" fill="currentColor">yields s8</text>`;
+    // right: one cap on the merged stream, and a row that should not exist
+    o += lane(384);
+    o += merge(460, 78);
+    for (const [, i] of layers) o += arrow(434 + i * 106, 60, 540 + (i - 1) * 50, 76, 'gray');
+    o += arrow(540, 106, 540, 122, 'gray');
+    o += `<rect x="460" y="124" width="160" height="16" rx="4" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.3"/>`;
+    o += `<text x="540" y="136" text-anchor="middle" font-size="10" font-weight="700" fill="${C.red}">≤ 31</text>`;
+    o += arrow(540, 142, 540, 158, 'red');
+    o += `<rect x="460" y="160" width="160" height="26" rx="5" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.6"/>`;
+    o += `<text x="540" y="178" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.red}">yields s27 — leaked</text>`;
     return o;
   })()),
 };
 
 module.exports['skv-shadow'] = {
-  title: 'Copy-on-write shadowing is arithmetic, not bookkeeping',
+  title: 'A child’s write sits above the row it inherited',
   type: 'svg',
-  body: svg('0 0 720 236', (() => {
+  body: svg('0 0 720 150', (() => {
     let o = '';
-    o += label(20, 20, 'The child writes user:7. Nothing in the parent changes, and nothing records that the key is now overridden.', 'start', 0.72);
-    o += box(20, 34, 200, 47, C.blue, 'child  ·  cap 31', ['fork anchor at 25']);
-    o += box(20, 100, 200, 47, C.green, 'parent  ·  cap 25', ['untouched by the write']);
-    // versions
-    o += `<rect x="250" y="38" width="180" height="34" rx="6" fill="${C.purple}" stroke="${INK}" stroke-width="1.6"/>`;
-    o += `<text x="340" y="52" text-anchor="middle" font-size="10.5" font-weight="700" fill="${INK}">user:7 = "mine"</text>`;
-    o += `<text x="340" y="66" text-anchor="middle" font-size="10" fill="${INK}" opacity="0.85">seq 31</text>`;
-    o += `<rect x="250" y="104" width="180" height="34" rx="6" fill="${fade(C.green)}" stroke="${C.green}" stroke-width="1.4"/>`;
-    o += `<text x="340" y="118" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.green}">user:7 = "theirs"</text>`;
-    o += `<text x="340" y="132" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.7">seq 14</text>`;
-    o += box(470, 62, 230, 77, C.gray, '31 > 14, so the child’s wins', ['and 31 > 25 = the anchor, so every', 'write the child makes outranks', 'everything it can inherit']);
-    o += arrow(432, 55, 468, 78, 'gray');
-    o += arrow(432, 121, 468, 98, 'gray');
-    o += para(20, 172, 'The same mechanism deletes: a tombstone at seq 32 in the child hides the parent’s row without the parent knowing, so a branch can delete a key it does not have.', { anchor: 'start', maxW: 680, op: 0.62 });
-    o += para(20, 197, 'The corollary matters later — “what a branch owns” and “what a branch wrote” are different sets, because detach copies inherited rows into the branch’s own tables at their ORIGINAL sequences. That is why diff still has to filter by sequence even after restricting itself to owned components.', { anchor: 'start', maxW: 680, op: 0.62 });
+    o += label(20, 22, 'one key, user:7', 'start', 0.85);
+    // the child's write and the parent's row it shadows
+    o += `<rect x="20" y="34" width="330" height="42" rx="7" fill="${C.purple}" stroke="${INK}" stroke-width="1.7"/>`;
+    o += `<text x="185" y="60" text-anchor="middle" font-size="12" font-weight="700" fill="${INK}">child · seq 31</text>`;
+    o += `<rect x="20" y="90" width="330" height="42" rx="7" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+    o += `<text x="185" y="116" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">parent · seq 14</text>`;
+    // the comparison the read makes
+    o += `<rect x="390" y="34" width="310" height="98" rx="9" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+    o += `<text x="545" y="66" text-anchor="middle" font-size="20" font-weight="700" fill="currentColor">31 &gt; 14</text>`;
+    o += label(545, 88, 'so the child’s row wins', 'middle', 0.72);
+    o += label(545, 112, 'no dirty set, no shadow table', 'middle', 0.55);
+    o += arrow(354, 55, 386, 68, 'gray');
+    o += arrow(354, 111, 386, 98, 'gray');
     return o;
   })()),
 };
 
 module.exports['skv-fork-protocol'] = {
-  title: 'The fork protocol: fence, drain, resolve, then publish exactly once',
+  title: 'The fork protocol: fence, drain, resolve, publish',
   type: 'svg',
-  body: svg('0 0 720 316', (() => {
+  body: svg('0 0 720 136', (() => {
     let o = '';
-    o += `<rect x="16" y="56" width="688" height="176" rx="10" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.3" stroke-dasharray="6,5"/>`;
-    o += label(28, 51, 'under the branch-op mutex — every branch operation in the store serialises here', 'start', 0.7);
-    o += para(20, 20, 'Before the mutex: if the catalog is at its 4,096-record cap, sweep synchronously and reclaim — a fork blocks rather than fails.', { anchor: 'start', maxW: 680, op: 0.68 });
-    o += box(30, 60, 198, 50, C.gray, '1 · resolve the parent', ['depth + 1 ≤ 64, or refuse']);
-    o += box(246, 60, 198, 50, C.gray, '2 · idempotent retry?', ['same lineage → same receipt']);
-    o += box(462, 60, 222, 50, C.amber, '3 · fence and drain', ['store-wide; the queue, not a counter']);
-    o += box(462, 140, 222, 50, C.blue, '4 · resolve fork_seq', ['Head / AtVersion / AtTimestamp']);
-    o += box(246, 140, 198, 50, C.blue, '5 · floor check', ['view_is_complete_at(F, floor)?']);
-    o += box(30, 140, 198, 50, C.purple, '6 · publish the catalog', ['← this is the commit point']);
-    o += arrow(228, 85, 244, 85, 'gray');
-    o += arrow(444, 85, 460, 85, 'gray');
-    o += arrow(573, 110, 573, 138, 'amber');
-    o += arrow(460, 165, 446, 165, 'blue');
-    o += arrow(246, 165, 230, 165, 'blue');
-    // refusals
-    o += arrow(573, 60, 573, 44, 'red', true);
-    o += label(573, 38, 'ForkFenceTimeout — retryable', 'middle', 0.72);
-    o += arrow(345, 140, 345, 126, 'red', true);
-    o += label(345, 122, 'BelowRetentionFloor { requested, floor }', 'middle', 0.72);
-    o += arrow(129, 190, 129, 206, 'red', true);
-    o += label(129, 211, 'a sequence before the parent’s own', 'middle', 0.72);
-    o += label(129, 224, 'creation is refused', 'middle', 0.72);
-    o += para(360, 252, 'Why drain at all: the fence makes visible_seq EXACTLY the head, so the anchor is the head rather than an approximation of it. The cost is honest and measured — the fence is store-wide, so fork_drain_nanos / forks is the pause every writer in the store took for somebody else’s fork.', { anchor: 'middle', maxW: 676, op: 0.6 });
-    o += para(360, 290, 'No data is copied and no table is written. Nothing before step 6 is durable, so any failure before it leaves no trace of the child at all.', { anchor: 'middle', maxW: 676, op: 0.55 });
+    // nothing is durable until the publish, so bracket everything upstream of it
+    o += `<rect x="12" y="36" width="420" height="68" rx="10" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.28" stroke-dasharray="6,5"/>`;
+    o += label(222, 28, 'nothing durable yet', 'middle', 0.65);
+    const stages = [['fence', 'store-wide', 0], ['drain', 'the queue', 0], ['resolve', 'fork_seq', 0], ['publish', 'one hard link', 1], ['done', 'nothing copied', 0]];
+    stages.forEach(([t, sub, hot], i) => {
+      const x = 20 + i * 140;
+      o += `<rect x="${x}" y="44" width="120" height="52" rx="9" fill="${hot ? C.purple : 'none'}" stroke="${hot ? INK : 'currentColor'}" stroke-width="${hot ? 1.7 : 1.2}"${hot ? '' : ' opacity="0.5"'}/>`;
+      o += `<text x="${x + 60}" y="66" text-anchor="middle" font-size="12" font-weight="700" fill="${hot ? INK : 'currentColor'}">${t}</text>`;
+      o += `<text x="${x + 60}" y="82" text-anchor="middle" font-size="10" fill="${hot ? INK : 'currentColor'}" opacity="${hot ? 0.8 : 0.6}">${sub}</text>`;
+      if (i < 4) o += arrow(x + 140 - 18, 70, x + 140 - 2, 70, 'gray');
+    });
+    o += label(500, 122, 'the commit point', 'middle', 0.8);
     return o;
   })()),
 };
 
 module.exports['skv-lineages'] = {
-  title: 'Three lineages, numbered and immutable — the catalog is the only authority',
+  title: 'Three lineages, numbered and immutable',
   type: 'svg',
-  body: svg('0 0 720 339', (() => {
+  body: svg('0 0 720 160', (() => {
     let o = '';
-    o += para(20, 20, 'A fork’s commit point must be one atomic durable act. Rewriting a manifest and renaming it into place is not one: rename is not compare-and-swap.', { anchor: 'start', maxW: 680, op: 0.7 });
-    const tracks = [
-      [36, C.purple, 'catalog/⟨v⟩.catalog · SKBC', 'existence, generation, parentage,', 'anchors, TTLs — the sole authority'],
-      [122, C.blue, 'branch/⟨id⟩/⟨v⟩.state · SKBM', 'one branch’s owned durable facts —', 'subordinate, meaningless alone'],
-      [208, C.gray, 'root/⟨v⟩.root · SKRT', 'global recovery facts, next_table_id', 'watermark, timeline tail'],
-    ];
-    for (const [y, col, title, ...subs] of tracks) {
-      o += box(20, y, 268, 46 + 15 * subs.length, col, title, subs);
-      // version chips
-      let x = 306;
-      for (const v of ['v3', 'v4']) {
-        o += `<rect x="${x}" y="${y + 16}" width="34" height="24" rx="4" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3" stroke-dasharray="3,3"/>`;
-        o += `<text x="${x + 17}" y="${y + 32}" text-anchor="middle" font-size="9.5" fill="currentColor" opacity="0.4">${v}</text>`;
-        x += 40;
-      }
-      o += label(x + 2, y + 12, 'pruned', 'start', 0.4);
-      for (const v of ['v5', 'v6', 'v7', 'v8']) {
-        const newest = v === 'v8';
-        o += `<rect x="${x}" y="${y + 16}" width="34" height="24" rx="4" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="${newest ? 2.4 : 1.2}"/>`;
-        o += `<text x="${x + 17}" y="${y + 32}" text-anchor="middle" font-size="9.5" font-weight="${newest ? 700 : 400}" fill="${strokeFor(col)}">${v}</text>`;
-        x += 40;
-      }
-      o += label(x + 4, y + 32, 'newest', 'start', 0.5);
-    }
-    o += arrow(154, 122, 154, 96, 'blue');
-    o += arrow(154, 208, 154, 182, 'gray');
-    o += label(162, 196, 'validated against the catalog', 'start', 0.6);
-    o += para(20, 300, 'Each version is magic + version + body + crc32, published by conditional hard-link create. AlreadyExists → byte-compare → AlreadyExistsSame, so an interrupted publish that is retried with identical bytes is indistinguishable from having succeeded: idempotent retries for free. Four versions are kept.', { anchor: 'start', maxW: 680, op: 0.58 });
+    // the three file paths
+    const paths = ['catalog/⟨v⟩.catalog', 'branch/⟨id⟩/⟨v⟩.state', 'root/⟨v⟩.root'];
+    paths.forEach((p, i) => {
+      const y = 40 + i * 38;
+      o += `<rect x="20" y="${y}" width="250" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="${i === 0 ? 1.5 : 1.1}" opacity="${i === 0 ? 0.7 : 0.42}"/>`;
+      o += `<text x="145" y="${y + 20}" text-anchor="middle" font-size="10.5" font-weight="${i === 0 ? 700 : 500}" fill="currentColor" opacity="${i === 0 ? 0.95 : 0.75}">${p}</text>`;
+    });
+    // one lineage's version chain: immutable, numbered, and the next name is the claim
+    ['v6', 'v7', 'v8', 'v9'].forEach((v, i) => {
+      const x = 282 + i * 36, next = v === 'v9';
+      o += `<rect x="${x}" y="44" width="32" height="22" rx="4" fill="none" stroke="currentColor" stroke-width="1.1" opacity="${next ? 0.35 : 0.6}"${next ? ' stroke-dasharray="3,3"' : ''}/>`;
+      o += `<text x="${x + 16}" y="${59}" text-anchor="middle" font-size="9.5" fill="currentColor" opacity="${next ? 0.45 : 0.8}">${v}</text>`;
+    });
+    o += label(370, 82, 'newest', 'middle', 0.5);
+    o += arrow(410, 68, 436, 80, 'purple');
+    // the rule that makes publishing a fork atomic
+    o += `<rect x="440" y="36" width="260" height="88" rx="9" fill="${C.purple}" stroke="${INK}" stroke-width="1.7"/>`;
+    o += `<text x="570" y="60" text-anchor="middle" font-size="12" font-weight="700" fill="${INK}">hard-link the next name</text>`;
+    o += `<text x="570" y="82" text-anchor="middle" font-size="10.5" fill="${INK}" opacity="0.85">it already exists → it fails</text>`;
+    o += `<text x="570" y="102" text-anchor="middle" font-size="10.5" fill="${INK}" opacity="0.85">so publish is a compare-and-swap</text>`;
     return o;
   })()),
 };
 
 module.exports['skv-catalog-lifecycle'] = {
-  title: 'A deletion tombstone is a transition fence, not a permanent tenant',
+  title: 'Deleting a branch: tombstone, reclaim, remove, retire',
   type: 'svg',
-  body: svg('0 0 720 300', (() => {
+  body: svg('0 0 720 268', (() => {
     let o = '';
     o += para(20, 20, 'Deleting a branch cannot just drop its catalog record: runtimes, WAL pins, level state, tables and its authority lineage all still exist. So deletion writes a durable tombstone — and the tombstone has to be retired afterwards, or lifetime create count consumes the 4,096-record format cap.', { anchor: 'start', maxW: 680, op: 0.7 });
     const steps = [
@@ -1189,10 +1141,9 @@ module.exports['skv-catalog-lifecycle'] = {
       if (x < 552) o += arrow(x + 146, 86, x + 174, 86, 'gray');
     }
     o += `<rect x="24" y="134" width="672" height="44" rx="6" fill="${fade(C.green)}" stroke="${C.green}" stroke-width="1.4"/>`;
-    o += para(360, 152, 'a failure anywhere before step 4 leaves the tombstone in place, so maintenance simply retries — the order is what makes retirement crash-safe', { anchor: 'middle', maxW: 640, size: 11, lh: 14, op: 0.95 });
+    o += para(360, 152, 'a failure anywhere before step 4 leaves the tombstone in place, so the maintenance pass simply retries', { anchor: 'middle', maxW: 640, size: 11, lh: 14, op: 0.95 });
     o += box(24, 182, 328, 77, C.gray, 'what still fences a reused BranchId', ['branch generations are globally monotone, and a physical', 'owner names its generation — so an old transaction or WAL', 'row stays fenced even if an id is minted again']);
     o += box(376, 182, 320, 77, C.gray, 'what that let go', ['the recovered clock no longer anchors on retired records:', 'their data and authority are already gone, and', 'next_generation alone carries the fencing']);
-    o += para(360, 274, 'The knock-on is worth noticing: retiring tombstones weakened what max_version_anchor has to promise. Removing a mechanism made a neighbouring invariant smaller rather than larger — which is the shape most of the decisions in this post have.', { anchor: 'middle', maxW: 676, op: 0.6 });
     return o;
   })()),
 };
@@ -1200,80 +1151,68 @@ module.exports['skv-catalog-lifecycle'] = {
 module.exports['skv-lock-order'] = {
   title: 'Four locks, one order',
   type: 'svg',
-  body: svg('0 0 720 318', (() => {
+  body: svg('0 0 720 172', (() => {
     let o = '';
-    o += para(20, 20, 'Every path that touches more than one of these takes them in this order. Two paths taking any pair in opposite orders is a deadlock, not a race.', { anchor: 'start', maxW: 680, op: 0.7 });
-    const locks = [
-      [40, C.amber, 'branch_materialization', 'serialises O(dataset) work: detach, delete, sweep, checkpoint, restore'],
-      [96, C.purple, 'catalog_publish', 'serialises every durable branch operation — the commit point of all of them'],
-      [152, C.blue, 'commit_pipeline write fence  |  level_manifest', 'either or both, and never before the two above'],
-    ];
-    let step = 0;
-    for (const [y, col, t, sub] of locks) {
-      const x = 40 + step * 60;
-      o += box(x, y, 620 - step * 60, 44, col, t, [sub]);
-      if (step < 2) o += arrow(x + 24, y + 46, x + 84, y + 92, 'gray');
-      step++;
-    }
-    o += box(40, 212, 200, 62, C.gray, 'why detach needed its own', ['copying an inherited dataset must not', 'block unrelated catalog operations']);
-    o += box(262, 212, 200, 62, C.gray, 'so detach now', ['materialises first, takes catalog_publish', 'only for the final parent-link publish']);
-    o += box(484, 212, 196, 62, C.green, 'and re-validates after', ['the owner may have been fenced', 'while the copy was running']);
-    o += para(360, 292, 'The order is enforced by a test that reads the source text of record_merge_edge and asserts catalog_publish.lock() appears before level_manifest.read().', { anchor: 'middle', maxW: 676, op: 0.6 });
+    o += label(20, 22, 'always taken in this order', 'start', 0.85);
+    // a spine marking the direction the order runs in
+    o += `<rect x="64" y="34" width="6" height="98" rx="3" fill="${C.purple}" stroke="${INK}" stroke-width="0.8"/>`;
+    o += `<path d="M56,132 L78,132 L67,148 Z" fill="${C.purple}" stroke="${INK}" stroke-width="1.1"/>`;
+    const tier = (x, y, w, t) => {
+      let s = `<rect x="${x}" y="${y}" width="${w}" height="34" rx="7" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+      s += `<text x="${x + w / 2}" y="${y + 22}" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">${t}</text>`;
+      return s;
+    };
+    o += tier(104, 34, 480, 'branch_materialization');
+    o += tier(104, 82, 480, 'catalog_publish');
+    o += tier(104, 130, 234, 'commit pipeline fence');
+    o += tier(350, 130, 234, 'level manifest');
+    o += label(600, 152, 'either or both', 'start', 0.6);
     return o;
   })()),
 };
 
 module.exports['skv-compaction-conflict'] = {
-  title: 'The collision: the component whose job is forgetting, told what it may not forget',
+  title: 'The collision: one version, two claims on it',
   type: 'svg',
-  body: svg('0 0 720 284', (() => {
+  body: svg('0 0 720 158', (() => {
     let o = '';
-    o += label(20, 20, 'One key, user:7, and the versions compaction is about to merge. Two anchors sit on its history.', 'start', 0.72);
-    const vs = [[80, 's4', 'v1'], [200, 's14', 'v2'], [320, 's21', 'v3'], [440, 's27', 'v4'], [560, 's33', 'v5']];
-    o += `<line x1="60" y1="76" x2="660" y2="76" stroke="currentColor" stroke-width="1" opacity="0.25"/>`;
-    for (const [x, s, v] of vs) {
-      o += `<rect x="${x - 30}" y="58" width="60" height="34" rx="6" fill="${fade(C.blue)}" stroke="${C.blue}" stroke-width="1.4"/>`;
-      o += `<text x="${x}" y="74" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.blue}">${v}</text>`;
-      o += `<text x="${x}" y="87" text-anchor="middle" font-size="9.5" fill="currentColor" opacity="0.7">${s}</text>`;
+    o += label(20, 22, 'one key, newest first', 'start', 0.85);
+    // the version chain, with the contested version lit
+    const chain = [['s33', 34, 0], ['s21', 74, 1], ['s4', 114, 0]];
+    for (const [t, y, hot] of chain) {
+      o += `<rect x="280" y="${y}" width="160" height="32" rx="6" fill="${hot ? C.purple : 'none'}" stroke="${hot ? INK : 'currentColor'}" stroke-width="${hot ? 1.7 : 1.1}"${hot ? '' : ' opacity="0.35"'}/>`;
+      o += `<text x="360" y="${y + 21}" text-anchor="middle" font-size="11.5" font-weight="700" fill="${hot ? INK : 'currentColor'}"${hot ? '' : ' opacity="0.55"'}>${t}</text>`;
     }
-    for (const [x, lab] of [[260, 'b2 anchored @ 17'], [500, 'b3 anchored @ 30']]) {
-      o += `<line x1="${x}" y1="46" x2="${x}" y2="104" stroke="${INK}" stroke-width="2"/>`;
-      o += `<rect x="${x - 52}" y="30" width="104" height="16" rx="4" fill="${fade(C.amber)}" stroke="${C.amber}" stroke-width="1.2"/>`;
-      o += `<text x="${x}" y="42" text-anchor="middle" font-size="9.5" font-weight="700" fill="${C.amber}">${lab}</text>`;
-    }
-    o += label(20, 130, 'three candidate outputs, and the reader each one breaks:', 'start', 0.8);
-    const outs = [
-      [146, C.red, 'keep only the newest', 'both readers get v5 — never current at either anchor'],
-      [178, C.red, 'keep everything below the highest anchor', 'both correct; the parent never reclaims anything'],
-      [210, C.green, 'keep the newest version at or below EACH anchor', 'b2 reads v3, b3 reads v4 — two versions retained, not five'],
-    ];
-    for (const [y, col, t, sub] of outs) {
-      o += `<rect x="20" y="${y}" width="676" height="26" rx="5" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="1.3"/>`;
-      o += `<text x="30" y="${y + 17}" font-size="10.5" font-weight="700" fill="${strokeFor(col)}">${t}</text>`;
-      o += para(330, y + 12, sub, { maxW: 370, op: 0.72 });
-    }
-    o += para(20, 258, 'Compaction’s entire purpose is to discard superseded versions. A live anchor says some superseded versions are still somebody’s current. That is the collision.', { anchor: 'start', maxW: 680, op: 0.62 });
+    // the two claims that meet on it
+    const claim = (x, w, t, sub) => {
+      let s = `<rect x="${x}" y="66" width="${w}" height="48" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+      s += `<text x="${x + w / 2}" y="86" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">${t}</text>`;
+      s += label(x + w / 2, 103, sub, 'middle', 0.62);
+      return s;
+    };
+    o += claim(20, 220, 'compaction', 'superseded — drop it');
+    o += claim(500, 200, 'a fork anchor', 'still current — keep it');
+    o += arrow(244, 90, 276, 90, 'gray');
+    o += arrow(496, 90, 444, 90, 'gray');
     return o;
   })()),
 };
 
 module.exports['skv-anchor-kinds'] = {
-  title: 'Three kinds of anchor, one promise',
+  title: 'Three sources of retention anchors',
   type: 'svg',
-  body: svg('0 0 720 275', (() => {
+  body: svg('0 0 720 172', (() => {
     let o = '';
-    o += label(360, 20, 'Every sequence cap at which some DURABLE reader still reads one owner exactly.', 'middle', 0.75);
-    o += box(20, 34, 214, 68, C.blue, 'a live child’s fork anchor', ['its inherited view is re-resolved', 'at that cap on every read']);
-    o += box(252, 34, 214, 68, C.amber, 'a live edge’s target head', ['preserves durable merge history —', 'not a base value']);
-    o += box(484, 34, 216, 68, C.amber, 'the edge’s source cursor', ['preserves the actual three-way base:', 'merging never mutates the source']);
-    o += box(230, 138, 260, 62, C.purple, 'RetentionAnchors', ['sorted descending, deduplicated —', 'and nothing is ever dropped for size']);
-    o += arrow(127, 104, 280, 136, 'blue');
-    o += arrow(359, 104, 359, 136, 'amber');
-    o += arrow(592, 104, 440, 136, 'amber');
-    o += `<rect x="20" y="204" width="676" height="42" rx="6" fill="${fade(C.gray)}" stroke="${C.gray}" stroke-width="1.3"/>`;
-    o += `<text x="30" y="221" font-size="10.5" font-weight="700" fill="${C.gray}">a stale edge pins nothing</text>`;
-    o += para(190, 218, 'its source is gone, so no future merge can measure from that base — and holding history for a deleted branch is how a store that churns sandboxes never reclaims', { anchor: 'start', maxW: 510, op: 0.68 });
-    o += para(360, 262, 'An anchor is a promise, so the set is never truncated: its size is already bounded by the catalog’s own 4,096-record cap.', { anchor: 'middle', maxW: 676, op: 0.58 });
+    o += label(360, 22, 'every cap a durable reader still needs', 'middle', 0.7);
+    const src = [[20, 214, 'a child’s fork anchor'], [252, 214, 'an edge’s target head'], [484, 216, 'an edge’s source cursor']];
+    for (const [x, w, t] of src) {
+      o += `<rect x="${x}" y="34" width="${w}" height="40" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+      o += `<text x="${x + w / 2}" y="59" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">${t}</text>`;
+      o += arrow(x + w / 2, 76, 360 + (x - 252) * 0.22, 108, 'gray');
+    }
+    o += `<rect x="230" y="110" width="260" height="46" rx="9" fill="${C.purple}" stroke="${INK}" stroke-width="1.7"/>`;
+    o += `<text x="360" y="132" text-anchor="middle" font-size="12.5" font-weight="700" fill="${INK}">RetentionAnchors</text>`;
+    o += `<text x="360" y="148" text-anchor="middle" font-size="10" fill="${INK}" opacity="0.8">kept as a set</text>`;
     return o;
   })()),
 };
@@ -1281,67 +1220,62 @@ module.exports['skv-anchor-kinds'] = {
 module.exports['skv-anchor-walker'] = {
   title: 'One index, descending: every anchor served in a single pass',
   type: 'svg',
-  body: svg('0 0 720 273', (() => {
+  body: svg('0 0 720 190', (() => {
     let o = '';
-    o += para(20, 20, 'Anchors descend. A key’s versions arrive newest-first. So one shared index that never rewinds is enough for any number of branches.', { anchor: 'start', maxW: 680, op: 0.72 });
-    o += label(60, 46, 'anchors (descending)', 'start', 0.82);
-    o += label(300, 46, 'versions (newest first)', 'start', 0.82);
-    o += label(500, 46, 'verdict', 'start', 0.82);
-    const anchors = [[30, 'a1 = 30'], [21, 'a2 = 21'], [17, 'a3 = 17'], [6, 'a4 = 6']];
-    let y = 56;
-    for (const [, t] of anchors) {
-      o += `<rect x="60" y="${y}" width="120" height="26" rx="5" fill="${fade(C.amber)}" stroke="${C.amber}" stroke-width="1.3"/>`;
-      o += `<text x="70" y="${y + 17}" font-size="10.5" font-weight="700" fill="${C.amber}">${t}</text>`;
-      y += 32;
-    }
-    // the shared index
-    o += `<path d="M40,69 L54,62 L54,76 Z" fill="${C.purple}" stroke="${INK}" stroke-width="1.2"/>`;
-    o += `<rect x="20" y="188" width="160" height="24" rx="5" fill="${C.purple}" stroke="${INK}" stroke-width="1.4"/>`;
-    o += `<text x="100" y="204" text-anchor="middle" font-size="10.5" font-weight="700" fill="${INK}">one index, never rewinds</text>`;
-    const versions = [[33, 'serves nothing → droppable', C.gray], [27, 'serves a1 (30) → KEEP', C.green], [19, 'serves a2 (21) and a3 (17) → KEEP', C.green], [4, 'serves a4 (6) → KEEP', C.green]];
-    y = 56;
-    for (const [s, verdict, col] of versions) {
-      o += `<rect x="300" y="${y}" width="120" height="26" rx="5" fill="${fade(C.blue)}" stroke="${C.blue}" stroke-width="1.3"/>`;
-      o += `<text x="310" y="${y + 17}" font-size="10.5" font-weight="700" fill="${C.blue}">seq ${s}</text>`;
-      o += `<rect x="440" y="${y}" width="256" height="26" rx="5" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="1.2"/>`;
-      o += `<text x="450" y="${y + 17}" font-size="10" fill="${strokeFor(col)}">${verdict}</text>`;
-      y += 32;
-    }
-    o += para(20, 234, 'One version can serve several anchors — seq 19 answers both 21 and 17, because it is the newest version at or below each of them. Cost is O(versions + anchors), not O(versions × anchors): adding branches raises the anchor count without adding a pass over the key.', { anchor: 'start', maxW: 680, op: 0.62 });
+    o += label(140, 22, 'anchors, descending', 'middle', 0.8);
+    o += label(520, 22, 'versions, newest first', 'middle', 0.8);
+    const Y = (i) => 34 + i * 38;
+    // both lists sorted the same way, so one pass pairs them
+    ['30', '21', '17', '6'].forEach((t, i) => {
+      o += `<rect x="80" y="${Y(i)}" width="120" height="28" rx="5" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.42"/>`;
+      o += `<text x="140" y="${Y(i) + 19}" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.82">${t}</text>`;
+    });
+    const pairs = [[], [0], [1, 2], [3]];
+    ['s33', 's27', 's19', 's4'].forEach((t, i) => {
+      const hot = pairs[i].length > 1;
+      o += `<rect x="460" y="${Y(i)}" width="120" height="28" rx="5" fill="${hot ? C.purple : 'none'}" stroke="${hot ? INK : 'currentColor'}" stroke-width="${hot ? 1.6 : 1.1}"${hot ? '' : ' opacity="0.42"'}/>`;
+      o += `<text x="520" y="${Y(i) + 19}" text-anchor="middle" font-size="11" font-weight="${hot ? 700 : 400}" fill="${hot ? INK : 'currentColor'}"${hot ? '' : ' opacity="0.82"'}>${t}</text>`;
+      for (const a of pairs[i]) {
+        o += `<line x1="456" y1="${Y(i) + 14}" x2="204" y2="${Y(a) + 14}" stroke="currentColor" stroke-width="${hot ? 1.5 : 1}" opacity="${hot ? 0.75 : 0.35}"/>`;
+      }
+    });
+    o += label(600, 128, 'serves two', 'start', 0.75);
+    o += label(360, 182, 'one index, never rewinds', 'middle', 0.62);
     return o;
   })()),
 };
 
 module.exports['skv-pin-shapes'] = {
-  title: 'Range-pin or per-anchor pin — what makes many branches affordable',
+  title: 'Range-pin and per-anchor pin over one version chain',
   type: 'svg',
-  body: svg('0 0 720 280', (() => {
+  body: svg('0 0 720 172', (() => {
     let o = '';
-    o += label(20, 20, 'Same key, same four anchors, two different parents.', 'start', 0.75);
-    const vs = [[70, 4], [175, 11], [280, 19], [385, 24], [490, 29], [595, 35]];
-    const draw = (y, keep, title, note, col) => {
-      let s = label(20, y - 10, title, 'start', 0.85);
-      s += para(300, y - 30, note, { maxW: 348, op: 0.62 });
-      for (const [x, seq] of vs) {
-        const k = keep.includes(seq);
-        s += `<rect x="${x - 30}" y="${y}" width="60" height="30" rx="5" fill="${k ? C.purple : fade(C.gray)}" stroke="${k ? INK : C.gray}" stroke-width="${k ? 1.6 : 1}"/>`;
-        s += `<text x="${x}" y="${y + 19}" text-anchor="middle" font-size="10" font-weight="${k ? 700 : 400}" fill="${k ? INK : C.gray}">s${seq}</text>`;
-        if (!k) s += `<line x1="${x - 26}" y1="${y + 25}" x2="${x + 26}" y2="${y + 5}" stroke="${C.gray}" stroke-width="1.2"/>`;
+    const cx = (i) => 72 + i * 112;
+    // one version chain, with the four anchors that sit on it
+    o += label(20, 22, 'anchors', 'start', 0.7);
+    for (const i of [2, 3, 4, 5]) o += `<path d="M${cx(i) - 7},14 L${cx(i) + 7},14 L${cx(i)},25 Z" fill="${C.purple}" stroke="${INK}" stroke-width="1"/>`;
+    ['s4', 's11', 's19', 's24', 's29', 's35'].forEach((v, i) => {
+      o += `<text x="${cx(i)}" y="44" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.8">${v}</text>`;
+    });
+    // the same chain, retained two ways
+    const row = (y, keep, title, note) => {
+      let s = label(24, y - 8, title, 'start', 0.85);
+      s += label(250, y - 8, note, 'start', 0.6);
+      for (let i = 0; i < 6; i++) {
+        const k = keep.includes(i), x = cx(i) - 48;
+        s += `<rect x="${x}" y="${y}" width="96" height="28" rx="5" fill="currentColor" fill-opacity="${k ? 0.14 : 0}" stroke="currentColor" stroke-width="${k ? 1.3 : 1}" stroke-opacity="${k ? 0.6 : 0.3}"${k ? '' : ' stroke-dasharray="4,3"'}/>`;
+        if (!k) s += `<line x1="${x + 6}" y1="${y + 23}" x2="${x + 90}" y2="${y + 5}" stroke="currentColor" stroke-width="1" opacity="0.32"/>`;
       }
-      s += `<text x="664" y="${y + 19}" font-size="10.5" font-weight="700" fill="${col}">${keep.length} kept</text>`;
       return s;
     };
-    o += draw(56, [4, 11, 19, 24, 29, 35], 'a VERSIONED parent', 'pins the whole range below its highest anchor — forks inherit full history, so any version under it may be wanted', C.red);
-    o += draw(132, [19, 24, 29, 35], 'a NON-VERSIONED parent', 'pins the newest version at or below EACH anchor — all a point-in-time reader can see', C.green);
-    o += para(20, 196, 'The second shape is what makes many branches affordable: one version per anchor, not the range. Add a fifth anchor to each and the first keeps growing while the second adds at most one version.', { anchor: 'start', maxW: 680, op: 0.62 });
-    o += `<rect x="20" y="226" width="676" height="44" rx="6" fill="${C.purple}" stroke="${INK}" stroke-width="1.5"/>`;
-    o += para(360, 244, 'the pin only ever ADDS retention — so with no children, compaction’s output is byte-identical to a store that never had branching compiled in', { anchor: 'middle', maxW: 640, size: 11, lh: 14, op: 1 });
+    o += row(70, [0, 1, 2, 3, 4, 5], 'a versioned parent · 6 kept', 'everything below the highest anchor');
+    o += row(134, [2, 3, 4, 5], 'a non-versioned parent · 4 kept', 'one version per anchor');
     return o;
   })()),
 };
 
 module.exports['skv-two-bottoms'] = {
-  title: 'Two ways to be wrong about “the bottom level”',
+  title: 'Two cases where the lowest level is not the bottom',
   type: 'svg',
   body: svg('0 0 720 297', (() => {
     let o = '';
@@ -1385,29 +1319,21 @@ module.exports['skv-two-bottoms'] = {
 module.exports['skv-pin-race'] = {
   title: 'Sample, merge, re-check: an anchor that appeared refuses the output',
   type: 'svg',
-  body: svg('0 0 720 293', (() => {
+  body: svg('0 0 720 154', (() => {
     let o = '';
-    o += label(20, 20, 'Anchors are durable, but they appear concurrently — and a compaction that already discarded a version cannot un-discard it.', 'start', 0.72);
-    o += `<rect x="20" y="36" width="676" height="46" rx="7" fill="${fade(C.gray)}" stroke="${C.gray}" stroke-width="1.3"/>`;
-    o += label(30, 32, 'the compaction job', 'start', 0.7);
-    o += `<rect x="30" y="48" width="86" height="22" rx="4" fill="${fade(C.blue)}" stroke="${C.blue}" stroke-width="1.2"/>`;
-    o += `<text x="73" y="63" text-anchor="middle" font-size="9.5" font-weight="700" fill="${C.blue}">sample anchors</text>`;
-    o += `<rect x="126" y="48" width="330" height="22" rx="4" fill="${fade(C.gray)}" stroke="${C.gray}" stroke-width="1.1"/>`;
-    o += `<text x="291" y="63" text-anchor="middle" font-size="9.5" fill="${C.gray}">merge — versions are dropped here</text>`;
-    o += `<rect x="466" y="48" width="106" height="22" rx="4" fill="${fade(C.amber)}" stroke="${C.amber}" stroke-width="1.2"/>`;
-    o += `<text x="519" y="63" text-anchor="middle" font-size="9.5" font-weight="700" fill="${C.amber}">re-check, under lock</text>`;
-    o += `<rect x="582" y="48" width="104" height="22" rx="4" fill="${fade(C.green)}" stroke="${C.green}" stroke-width="1.2"/>`;
-    o += `<text x="634" y="63" text-anchor="middle" font-size="9.5" font-weight="700" fill="${C.green}">publish</text>`;
-    // event
-    o += `<line x1="300" y1="94" x2="300" y2="70" stroke="${INK}" stroke-width="1.8" stroke-dasharray="4,3"/>`;
-    o += `<rect x="222" y="96" width="156" height="22" rx="4" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.3"/>`;
-    o += `<text x="300" y="111" text-anchor="middle" font-size="9.5" font-weight="700" fill="${C.red}">a fork publishes anchor 26</text>`;
-    // sets
-    o += box(20, 138, 330, 50, C.gray, 'sampled at job creation', ['{ 41, 17 }']);
-    o += box(366, 138, 330, 50, C.purple, 'at publish, under the lock', ['{ 41, 26, 17 }  →  appeared_since = 26']);
-    o += `<rect x="20" y="204" width="676" height="30" rx="6" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.5"/>`;
-    o += `<text x="360" y="223" text-anchor="middle" font-size="11" font-weight="700" fill="${C.red}">CompactionPinRaced { unsampled_anchor: 26 } — the job discards its own output, and the inputs stay live for the next cycle</text>`;
-    o += para(360, 254, 'The asymmetry is the design: an anchor that APPEARED may need a version this job already dropped, so the output is refused. An anchor that VANISHED is harmless — the job merely over-retained, and it publishes. A few races are normal; many mean you are forking against heavy compaction.', { anchor: 'middle', maxW: 676, op: 0.6 });
+    // an anchor lands mid-merge
+    o += `<rect x="215" y="20" width="170" height="24" rx="6" fill="${C.purple}" stroke="${INK}" stroke-width="1.5"/>`;
+    o += `<text x="300" y="37" text-anchor="middle" font-size="11" font-weight="700" fill="${INK}">anchor 26 appears</text>`;
+    o += `<line x1="300" y1="44" x2="300" y2="66" stroke="${INK}" stroke-width="1.6" stroke-dasharray="4,3"/>`;
+    const stages = [['sample', 'the anchor set', 0], ['merge', 'versions dropped', 0], ['re-check', 'under the lock', 0], ['refuse', 'output discarded', 1]];
+    stages.forEach(([t, sub, bad], i) => {
+      const x = 20 + i * 175;
+      o += `<rect x="${x}" y="66" width="155" height="52" rx="9" fill="${bad ? fade(C.red) : 'none'}" stroke="${bad ? C.red : 'currentColor'}" stroke-width="${bad ? 1.7 : 1.2}"${bad ? '' : ' opacity="0.48"'}/>`;
+      o += `<text x="${x + 77}" y="88" text-anchor="middle" font-size="12" font-weight="700" fill="${bad ? C.red : 'currentColor'}">${t}</text>`;
+      o += `<text x="${x + 77}" y="105" text-anchor="middle" font-size="10" fill="${bad ? C.red : 'currentColor'}" opacity="${bad ? 0.85 : 0.6}">${sub}</text>`;
+      if (i < 3) o += arrow(x + 157, 92, x + 173, 92, 'gray');
+    });
+    o += label(600, 140, 'the inputs stay live', 'middle', 0.62);
     return o;
   })()),
 };
@@ -1415,33 +1341,28 @@ module.exports['skv-pin-race'] = {
 module.exports['skv-branch-runtimes'] = {
   title: 'What a fork allocates, and when',
   type: 'svg',
-  body: svg('0 0 720 270', (() => {
+  body: svg('0 0 720 180', (() => {
     let o = '';
-    o += `<rect x="20" y="34" width="676" height="62" rx="8" fill="${fade(C.gray)}" stroke="${C.gray}" stroke-width="1.4"/>`;
-    o += label(30, 28, 'one per store, however many branches exist', 'start', 0.78);
-    const shared = ['WAL', 'commit pipeline', 'clock + timeline', 'table-id allocator', 'write-buffer soft limit'];
-    let x = 30;
-    for (const s of shared) {
-      o += `<rect x="${x}" y="46" width="128" height="40" rx="6" fill="${fade(C.blue)}" stroke="${C.blue}" stroke-width="1.2"/>`;
-      o += `<text x="${x + 64}" y="64" text-anchor="middle" font-size="9.5" font-weight="700" fill="${C.blue}">${s}</text>`;
-      o += `<text x="${x + 64}" y="78" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.6">×1</text>`;
-      x += 134;
-    }
-    o += `<rect x="20" y="118" width="676" height="66" rx="8" fill="${fade(C.green)}" stroke="${C.green}" stroke-width="1.4"/>`;
-    o += label(30, 112, 'one per branch — allocated on its FIRST WRITE, never at the fork', 'start', 0.78);
-    const brs = [['main', true], ['feature', true], ['sandbox-1', true], ['sandbox-2', false], ['sandbox-3', false], ['…1000 more', false]];
-    x = 30;
-    for (const [n, live] of brs) {
-      o += `<rect x="${x}" y="130" width="106" height="44" rx="6" fill="${live ? fade(C.green) : 'none'}" stroke="${live ? C.green : C.gray}" stroke-width="1.2"${live ? '' : ' stroke-dasharray="4,3"'}/>`;
-      o += `<text x="${x + 53}" y="146" text-anchor="middle" font-size="9.5" font-weight="700" fill="${live ? C.green : C.gray}">${n}</text>`;
-      o += `<text x="${x + 53}" y="160" text-anchor="middle" font-size="8.5" fill="currentColor" opacity="${live ? 0.7 : 0.4}">${live ? 'memtable + levels' : 'not allocated'}</text>`;
-      o += `<text x="${x + 53}" y="170" text-anchor="middle" font-size="8.5" fill="currentColor" opacity="${live ? 0.7 : 0.4}">${live ? 'arena resident' : 'zero bytes'}</text>`;
-      x += 112;
-    }
-    o += `<rect x="20" y="200" width="676" height="22" rx="5" fill="none" stroke="${C.gray}" stroke-width="1.2"/>`;
-    o += `<rect x="21" y="201" width="270" height="20" rx="4" fill="${C.purple}"/>`;
-    o += `<text x="156" y="216" text-anchor="middle" font-size="10" font-weight="700" fill="${INK}">write buffer in use — a soft limit, shared</text>`;
-    o += para(360, 244, '1,003 branches, 3 runtimes. The soft limit triggers pressure rotation; it is not a hard resident-memory cap, because rotation does not release an immutable arena until its flush completes.', { anchor: 'middle', maxW: 676, op: 0.58 });
+    const pill = (x, y, w, t) => {
+      let s = `<rect x="${x}" y="${y}" width="${w}" height="32" rx="6" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.42"/>`;
+      s += `<text x="${x + w / 2}" y="${y + 21}" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.82">${t}</text>`;
+      return s;
+    };
+    // shared, one per store
+    o += label(20, 22, 'one per store', 'start', 0.85);
+    o += pill(20, 30, 158, 'WAL');
+    o += pill(190, 30, 158, 'commit pipeline');
+    o += pill(20, 72, 158, 'clock');
+    o += pill(190, 72, 158, 'table-id allocator');
+    // per branch
+    o += label(384, 22, 'one per branch', 'start', 0.85);
+    o += pill(384, 30, 316, 'memtable ×N');
+    o += pill(384, 72, 316, 'level set ×N');
+    o += `<line x1="366" y1="26" x2="366" y2="112" stroke="currentColor" stroke-width="1" opacity="0.22" stroke-dasharray="4,4"/>`;
+    // when the per-branch state is allocated
+    o += `<rect x="20" y="126" width="680" height="34" rx="8" fill="${C.purple}" stroke="${INK}" stroke-width="1.6"/>`;
+    o += `<text x="360" y="148" text-anchor="middle" font-size="12" font-weight="700" fill="${INK}">allocated on the first write, not at the fork</text>`;
+    o += label(360, 174, '1,003 branches, 3 runtimes', 'middle', 0.6);
     return o;
   })()),
 };
@@ -1456,54 +1377,35 @@ module.exports['skv-what-a-branch-costs'] = {
     <tr><td>clock + timeline</td><td>1</td><td>none — <code>AtTimestamp</code> resolves against the store's timeline</td></tr>
     <tr><td>table-id allocator</td><td>1, block-reserved in the root lineage</td><td>none</td></tr>
     <tr><td>write buffer</td><td>1 soft limit</td><td>draws from the shared limit</td></tr>
-    <tr><td>snapshot tracker</td><td>1</td><td>none — and this is a known conservatism: one branch's snapshot pins visibility for <i>every</i> owner's compaction</td></tr>
+    <tr><td>snapshot tracker</td><td>1</td><td>none — one branch's snapshot pins visibility for <i>every</i> owner's compaction</td></tr>
     <tr><td>active memtable</td><td>—</td><td>1, allocated on the branch's <b>first write</b>, never at the fork</td></tr>
     <tr><td>level set</td><td>—</td><td>1; every SSTable belongs to exactly one owner</td></tr>
-    <tr><td>catalog entry</td><td>—</td><td>one record in one published catalog version — <b>the entire durable cost of a fork</b></td></tr>
-    <tr><td>retained versions in the parent</td><td>—</td><td><b>the one that actually grows.</b> One version per anchor per key, for a non-versioned parent</td></tr>
+    <tr><td>catalog entry</td><td>—</td><td>one record in one published catalog version; no data is written</td></tr>
+    <tr><td>retained versions in the parent</td><td>—</td><td>one version per anchor per key, for a non-versioned parent</td></tr>
     <tr><td>read amplification</td><td>—</td><td>one more layer in the merge, and one more <code>min</code> in the cap — so it tracks fork <i>depth</i>, not branch count</td></tr>
     </tbody></table>
-    <p style="font-size:.82rem;opacity:.72;margin:.7rem 0 0">On metrics: <code>pin_retained_versions_total</code> counts versions that completed compactions retained <i>solely</i> because an anchor needed them, cumulatively since the process opened. It measures retention <b>work</b>, not how many extra versions are live on disk right now — so it tells you whether branches are costing you, not how much space they currently hold. <code>wal_pinned_segments</code> counts distinct referenced segments, and <code>timeline_horizon</code> is the range <code>AtTimestamp</code> can still answer inside.</p>`,
+    <p style="font-size:.82rem;opacity:.72;margin:.7rem 0 0">On metrics: <code>pin_retained_versions_total</code> counts versions that completed compactions retained <i>solely</i> because an anchor needed them, cumulatively since the process opened. It measures retention <b>work</b>, not how many extra versions are live on disk right now. <code>wal_pinned_segments</code> counts distinct referenced segments, and <code>timeline_horizon</code> is the range <code>AtTimestamp</code> can still answer inside.</p>`,
 };
 
 module.exports['skv-diff'] = {
-  title: 'Own components are not own writes',
+  title: 'What a branch’s own components hold after a detach',
   type: 'svg',
-  body: svg('0 0 720 273', (() => {
+  body: svg('0 0 720 190', (() => {
     let o = '';
-    o += para(20, 20, 'A diff reads the branch’s own components and no ancestor layers at all. It then still has to filter by sequence — and that filter is not redundant.', { anchor: 'start', maxW: 680, op: 0.72 });
-    o += `<rect x="20" y="36" width="290" height="176" rx="8" fill="${fade(C.green)}" stroke="${C.green}" stroke-width="1.4"/>`;
-    o += label(30, 52, 'feature’s OWN components', 'start', 0.85);
-    const comps = [['active memtable', 60, [['user:3 · s31 · Set', true]]], ['L0', 102, [['user:5 · s29 · Delete', true], ['user:8 · s27 · Set', true]]], ['L1', 156, [['user:9 · s6 · inherited', false], ['user:2 · s4 · inherited', false]]]];
-    for (const [n, y, rows] of comps) {
-      o += `<rect x="30" y="${y}" width="270" height="${18 + rows.length * 17}" rx="5" fill="none" stroke="${C.green}" stroke-width="1" stroke-dasharray="3,3"/>`;
-      o += `<text x="38" y="${y + 13}" font-size="9.5" font-weight="700" fill="${C.green}">${n}</text>`;
-      let ry = y + 17;
-      for (const [t, own] of rows) {
-        o += `<rect x="120" y="${ry}" width="172" height="14" rx="3" fill="${own ? fade(C.blue) : fade(C.gray)}" stroke="${own ? C.blue : C.gray}" stroke-width="1"/>`;
-        o += `<text x="126" y="${ry + 11}" font-size="8.5" fill="${own ? C.blue : C.gray}">${t}</text>`;
-        ry += 17;
-      }
-    }
-    // gate
-    o += `<rect x="336" y="106" width="84" height="40" rx="7" fill="${C.purple}" stroke="${INK}" stroke-width="1.6"/>`;
-    o += `<text x="378" y="124" text-anchor="middle" font-size="11" font-weight="700" fill="${INK}">seq &gt; 24</text>`;
-    o += `<text x="378" y="138" text-anchor="middle" font-size="9" fill="${INK}" opacity="0.85">base = the anchor</text>`;
-    o += arrow(312, 126, 334, 126, 'gray');
-    o += arrow(422, 126, 444, 126, 'gray');
-    o += `<rect x="446" y="36" width="250" height="176" rx="8" fill="none" stroke="${C.blue}" stroke-width="1.4"/>`;
-    o += label(456, 52, 'the diff', 'start', 0.85);
-    const out = [['user:3 → Set("v9") · s31', C.blue], ['user:5 → Delete · s29', C.red], ['user:8 → Set("x") · s27', C.blue]];
-    let y = 62;
-    for (const [t, col] of out) {
-      o += `<rect x="456" y="${y}" width="230" height="22" rx="4" fill="${fade(col)}" stroke="${col}" stroke-width="1.2"/>`;
-      o += `<text x="466" y="${y + 15}" font-size="9.5" fill="${col}">${t}</text>`;
-      y += 27;
-    }
-    o += label(456, 158, 'a delete is a change — and it is the', 'start', 0.66);
-    o += label(456, 171, 'change a merge most needs to hear', 'start', 0.66);
-    o += label(456, 192, 'the two inherited rows are NOT emitted', 'start', 0.66);
-    o += para(20, 234, 'Detach materialises inherited rows into these same tables at their ORIGINAL sequences. So “everything this branch owns” stops being “everything this branch changed”, and only the sequence filter can still tell them apart. That filter is the difference between a diff and a lie.', { anchor: 'start', maxW: 680, op: 0.62 });
+    o += label(20, 22, 'the branch’s own components', 'start', 0.85);
+    // rows the branch owns, newest first — the anchor is the only thing separating them
+    const rows = [['user:3 · s31', 1], ['user:5 · s29', 1], ['user:8 · s27', 1], ['user:9 · s6', 0], ['user:2 · s4', 0]];
+    rows.forEach(([t, above], i) => {
+      const y = 32 + i * 28 + (above ? 0 : 18);
+      o += `<rect x="20" y="${y}" width="300" height="24" rx="5" fill="none" stroke="currentColor" stroke-width="1.1" opacity="${above ? 0.5 : 0.28}"/>`;
+      o += `<text x="170" y="${y + 17}" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="${above ? 0.85 : 0.4}">${t}</text>`;
+      if (!above) o += `<line x1="26" y1="${y + 20}" x2="314" y2="${y + 4}" stroke="currentColor" stroke-width="1" opacity="0.32"/>`;
+    });
+    // the filter that tells them apart
+    o += `<rect x="14" y="120" width="312" height="5" rx="2.5" fill="${C.purple}" stroke="${INK}" stroke-width="0.7"/>`;
+    o += label(334, 127, 'anchor 24', 'start', 0.8);
+    o += label(440, 74, 'its own writes', 'start', 0.7);
+    o += label(440, 158, 'materialised by detach', 'start', 0.7);
     return o;
   })()),
 };
@@ -1511,31 +1413,25 @@ module.exports['skv-diff'] = {
 module.exports['skv-merge-base'] = {
   title: 'A base that moves: fork point, source cursor, target edge',
   type: 'svg',
-  body: svg('0 0 720 285', (() => {
+  body: svg('0 0 720 176', (() => {
     let o = '';
-    const X = (s) => 120 + s * 13.6;
-    o += label(20, 20, 'The base is where the two branches last agreed — and after the first merge that is not the fork point.', 'start', 0.72);
-    o += box(20, 40, 94, 40, C.green, 'target', []);
-    o += box(20, 104, 94, 40, C.blue, 'source', []);
-    for (const [y, col, dots] of [[40, C.green, [10, 28, 36]], [104, C.blue, [14, 22, 33]]]) {
-      o += `<line x1="120" y1="${y + 20}" x2="700" y2="${y + 20}" stroke="currentColor" stroke-width="0.9" opacity="0.22"/>`;
-      for (const s of dots) {
-        o += `<circle cx="${X(s)}" cy="${y + 20}" r="7" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="1.4"/>`;
-        o += `<text x="${X(s)}" y="${y + 37}" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.65">${s}</text>`;
-      }
+    const X = (s) => 130 + (s - 4) * 15;
+    // two lanes on the one shared clock
+    for (const [y, name, dots] of [[52, 'target', [10, 28, 33, 40]], [108, 'source', [14, 22, 30]]]) {
+      o += `<rect x="20" y="${y}" width="92" height="32" rx="7" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+      o += `<text x="66" y="${y + 21}" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">${name}</text>`;
+      o += `<line x1="122" y1="${y + 16}" x2="700" y2="${y + 16}" stroke="currentColor" stroke-width="0.9" opacity="0.22"/>`;
+      for (const s of dots) o += `<circle cx="${X(s)}" cy="${y + 16}" r="6.5" fill="currentColor" fill-opacity="0.14" stroke="currentColor" stroke-width="1.3" stroke-opacity="0.5"/>`;
     }
-    // three marks
-    const marks = [[8, 'fork_at = 8', C.gray, 'original divergence — a scan probe must cover every target write above this'], [22, 'source_through = 22', C.purple, 'the source snapshot at this cap IS the base side of the comparison'], [28, 'target_at = 28', C.amber, 'durable edge history — reported to callers, and NOT a base value']];
-    let ly = 176;
-    for (const [s, t, col, note] of marks) {
-      o += `<line x1="${X(s)}" y1="34" x2="${X(s)}" y2="150" stroke="${strokeFor(col)}" stroke-width="2"${col === C.gray ? ' stroke-dasharray="5,4"' : ''}/>`;
-      o += `<rect x="${X(s) - 8}" y="${ly - 12}" width="16" height="16" rx="3" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="1.2"/>`;
-      o += `<rect x="176" y="${ly - 13}" width="152" height="18" rx="4" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="1.2"/>`;
-      o += `<text x="184" y="${ly}" font-size="9.5" font-weight="700" fill="${strokeFor(col)}">${t}</text>`;
-      o += para(338, ly - 4, note, { maxW: 362, op: 0.7 });
-      ly += 24;
+    // three sequences, and only one of them is the base
+    const marks = [[8, 'fork_at 8', 'original divergence', 0], [22, 'source_through 22', 'the base', 1], [33, 'target_at 33', 'edge history only', 0]];
+    for (const [s, t, note, hot] of marks) {
+      o += `<line x1="${X(s)}" y1="44" x2="${X(s)}" y2="148" stroke="${hot ? INK : 'currentColor'}" stroke-width="${hot ? 2.2 : 1.4}"${hot ? '' : ' opacity="0.4" stroke-dasharray="5,4"'}/>`;
+      const w = t.length * 6.6 + 16;
+      o += `<rect x="${X(s) - w / 2}" y="20" width="${w}" height="22" rx="5" fill="${hot ? C.purple : 'none'}" stroke="${hot ? INK : 'currentColor'}" stroke-width="${hot ? 1.6 : 1.1}"${hot ? '' : ' opacity="0.45"'}/>`;
+      o += `<text x="${X(s)}" y="${35}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${hot ? INK : 'currentColor'}">${t}</text>`;
+      o += label(X(s), 166, note, 'middle', hot ? 0.85 : 0.6);
     }
-    o += para(20, 246, 'Why the target head cannot be the base: merging into a target never mutates the source, so target-only values present at that edge were never incorporated into source history. Treating them as a common base makes a later source edit look uncontested — and quietly overwrites the target.', { anchor: 'start', maxW: 680, op: 0.62 });
     return o;
   })()),
 };
@@ -1553,68 +1449,69 @@ module.exports['skv-merge-verdicts'] = {
     <tr><td><code>"a"</code></td><td><code>"c"</code></td><td>deleted</td><td><b>conflict</b> — deleted by source, modified by target</td></tr>
     <tr><td><code>"a"</code></td><td>deleted</td><td><code>"b"</code></td><td><b>conflict</b> — modified by source, deleted by target</td></tr>
     </tbody></table>
-    <p style="font-size:.82rem;opacity:.72;margin:.7rem 0 0">Treating absence as an ordinary value is what makes delete-vs-delete <i>resolve</i> and delete-vs-modify <i>conflict</i>, with no special cases. Strategies: <code>Strict</code> (the default — refuses the whole merge, "because the alternative to knowing is guessing"), <code>SourceWins</code>, <code>TargetWins</code>, and <code>Resolve</code> with a caller-supplied resolver that may itself refuse. Every decision routes through one <code>decide</code> call, so no strategy can drift from the classification.</p>`,
+    <p style="font-size:.82rem;opacity:.72;margin:.7rem 0 0">Absence is treated as an ordinary value, so delete-vs-delete <i>resolves</i> and delete-vs-modify <i>conflicts</i> without a special case for either. Strategies: <code>Strict</code> (the default — refuses the whole merge), <code>SourceWins</code>, <code>TargetWins</code>, and <code>Resolve</code> with a caller-supplied resolver that may itself refuse. Every decision routes through one <code>decide</code> call, so no strategy can drift from the classification.</p>`,
 };
 
 module.exports['skv-merge-commit-order'] = {
-  title: 'Data first, edge second — and what the other order loses',
+  title: 'Data first, edge second, and a crash between them',
   type: 'svg',
-  body: svg('0 0 720 265', (() => {
+  body: svg('0 0 720 160', (() => {
     let o = '';
-    o += label(20, 20, 'A merge writes its data through the ordinary commit path, then records the promotion edge. A crash can land between the two.', 'start', 0.72);
-    const lane = (y, title, first, second, crashLabel, outcome, col) => {
-      let s = label(20, y - 8, title, 'start', 0.85);
-      s += `<rect x="150" y="${y}" width="180" height="34" rx="6" fill="${fillFor(C.green)}" stroke="${strokeFor(C.green)}" stroke-width="1.4"/>`;
-      s += `<text x="240" y="${y + 21}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.green}">${first}</text>`;
-      s += `<rect x="392" y="${y}" width="180" height="34" rx="6" fill="${fillFor(C.amber)}" stroke="${strokeFor(C.amber)}" stroke-width="1.4"/>`;
-      s += `<text x="482" y="${y + 21}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.amber}">${second}</text>`;
-      s += arrow(332, y + 17, 390, y + 17, 'gray');
-      s += `<line x1="361" y1="${y - 6}" x2="361" y2="${y + 40}" stroke="${C.red}" stroke-width="2" stroke-dasharray="4,3"/>`;
-      s += `<text x="361" y="${y - 10}" text-anchor="middle" font-size="9" font-weight="700" fill="${C.red}">${crashLabel}</text>`;
-      s += `<rect x="588" y="${y}" width="108" height="34" rx="6" fill="${fillFor(col)}" stroke="${strokeFor(col)}" stroke-width="1.5"/>`;
-      s += `<text x="642" y="${y + 21}" text-anchor="middle" font-size="10" font-weight="700" fill="${strokeFor(col)}">${outcome}</text>`;
+    // one crash point, two orders through it
+    o += `<line x1="322" y1="34" x2="322" y2="146" stroke="${C.red}" stroke-width="1.8" stroke-dasharray="4,3"/>`;
+    o += `<text x="322" y="28" text-anchor="middle" font-size="10.5" font-weight="700" fill="${C.red}">crash</text>`;
+    const lane = (y, name, first, second, outcome, ok) => {
+      let s = `<text x="20" y="${y + 23}" font-size="11.5" font-weight="700" fill="currentColor" opacity="0.85">${name}</text>`;
+      for (const [x, t] of [[110, first], [334, second]]) {
+        s += `<rect x="${x}" y="${y}" width="180" height="36" rx="7" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+        s += `<text x="${x + 90}" y="${y + 23}" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.85">${t}</text>`;
+      }
+      s += `<rect x="536" y="${y}" width="164" height="36" rx="7" fill="${ok ? C.purple : fade(C.red)}" stroke="${ok ? INK : C.red}" stroke-width="1.7"/>`;
+      s += `<text x="618" y="${y + 23}" text-anchor="middle" font-size="11" font-weight="700" fill="${ok ? INK : C.red}">${outcome}</text>`;
+      s += arrow(296, y + 18, 330, y + 18, 'gray');
+      s += arrow(516, y + 18, 532, y + 18, 'gray');
       return s;
     };
-    o += lane(56, 'as built', 'commit the data', 'record the edge', 'crash', 'safe', C.green);
-    o += label(20, 104, 'the next merge re-offers what was already applied, which either converges or conflicts — never a silent overwrite', 'start', 0.66);
-    o += lane(146, 'reversed', 'record the edge', 'commit the data', 'crash', 'data lost', C.red);
-    o += para(20, 194, 'the base has advanced past changes that were never written, so the next merge never offers them again — and nothing reports the loss', { anchor: 'start', maxW: 680, op: 0.66 });
-    o += para(20, 226, 'This is why the ordering is a correctness property rather than a preference: one order fails loudly and idempotently, the other fails silently. A scoped merge deliberately records no edge at all — a partial apply has not earned the claim that the source is fully merged.', { anchor: 'start', maxW: 680, op: 0.62 });
+    o += lane(40, 'as built', 'commit the data', 'record the edge', 're-offered', 1);
+    o += lane(104, 'reversed', 'record the edge', 'commit the data', 'silently lost', 0);
     return o;
   })()),
 };
 
 module.exports['skv-detach'] = {
-  title: 'Detach: the opposite trade from forking',
+  title: 'Detach: before and after the parent link is cleared',
   type: 'svg',
-  body: svg('0 0 720 277', (() => {
+  body: svg('0 0 720 176', (() => {
     let o = '';
-    o += label(180, 20, 'before', 'middle', 0.88);
-    o += label(540, 20, 'after detach', 'middle', 0.88);
-    o += `<line x1="360" y1="30" x2="360" y2="212" stroke="currentColor" stroke-width="1" opacity="0.25" stroke-dasharray="4,4"/>`;
-    // before
-    o += box(24, 34, 300, 50, C.green, 'parent', ['pinned: 4 versions it cannot drop']);
-    o += box(24, 100, 300, 50, C.blue, 'child', ['owns its own writes only']);
-    o += arrow(174, 98, 174, 86, 'gray');
-    o += label(182, 96, 'reads through, capped at the anchor', 'start', 0.62);
-    o += `<rect x="24" y="164" width="300" height="24" rx="5" fill="${fade(C.red)}" stroke="${C.red}" stroke-width="1.3"/>`;
-    o += `<text x="174" y="180" text-anchor="middle" font-size="10" font-weight="600" fill="${C.red}">the parent keeps paying for as long as the child lives</text>`;
-    // after
-    o += box(396, 34, 300, 50, C.green, 'parent', ['pinned: nothing — free to compact']);
-    o += box(396, 100, 300, 62, C.purple, 'child', ['now holds a materialised copy of', 'everything it was inheriting']);
-    o += `<rect x="404" y="170" width="284" height="18" rx="3" fill="${fade(C.gray)}" stroke="${C.gray}" stroke-width="1.1"/>`;
-    o += `<text x="546" y="183" text-anchor="middle" font-size="9" fill="${C.gray}">one new SSTable, below the child’s own levels</text>`;
-    o += `<rect x="396" y="198" width="300" height="24" rx="5" fill="${fade(C.green)}" stroke="${C.green}" stroke-width="1.3"/>`;
-    o += `<text x="546" y="214" text-anchor="middle" font-size="10" font-weight="600" fill="${C.green}">paid once, in bytes, and the chain gets shorter</text>`;
-    o += para(20, 238, 'The copy runs BEFORE the catalog lock is taken, so an O(dataset) detach does not block unrelated branch operations — and the owner is re-validated afterwards, because it may have been fenced while the copy was running. Detach is the right answer for the branch that turned out to be permanent.', { anchor: 'start', maxW: 680, op: 0.62 });
+    o += label(180, 22, 'before', 'middle', 0.88);
+    o += label(540, 22, 'after detach', 'middle', 0.88);
+    o += `<line x1="360" y1="32" x2="360" y2="164" stroke="currentColor" stroke-width="1" opacity="0.22" stroke-dasharray="4,4"/>`;
+    // a parent, with or without a pin on it
+    const parent = (x, chip, red) => {
+      let s = `<rect x="${x}" y="38" width="300" height="46" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+      s += `<text x="${x + 74}" y="66" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">parent</text>`;
+      s += `<rect x="${x + 160}" y="${52}" width="110" height="20" rx="5" fill="${red ? fade(C.red) : 'none'}" stroke="${red ? C.red : 'currentColor'}" stroke-width="1.2"${red ? '' : ' opacity="0.4"'}/>`;
+      s += `<text x="${x + 215}" y="66" text-anchor="middle" font-size="10" font-weight="700" fill="${red ? C.red : 'currentColor'}"${red ? '' : ' opacity="0.6"'}>${chip}</text>`;
+      return s;
+    };
+    o += parent(20, 'pinned', true);
+    o += parent(380, 'unpinned', false);
+    // the child: a thin view before, a holder of one materialised table after
+    o += `<rect x="20" y="108" width="300" height="40" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+    o += `<text x="170" y="133" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">child</text>`;
+    o += arrow(170, 106, 170, 90, 'gray');
+    o += `<rect x="380" y="108" width="300" height="40" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+    o += `<text x="424" y="133" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">child</text>`;
+    o += `<rect x="474" y="118" width="196" height="21" rx="4" fill="${C.purple}" stroke="${INK}" stroke-width="1.5"/>`;
+    o += `<text x="572" y="133" text-anchor="middle" font-size="10" font-weight="700" fill="${INK}">one new SSTable</text>`;
     return o;
   })()),
 };
 
 module.exports['skv-errors'] = {
-  title: 'The refusals, and what each one declined to guess',
+  title: 'The refusals, and what each one does not answer',
   type: 'html',
-  body: `<table class="cmp"><thead><tr><th>Refusal</th><th>What it declined to guess</th><th>Retryable?</th><th>What you do instead</th></tr></thead><tbody>
+  body: `<table class="cmp"><thead><tr><th>Refusal</th><th>What it does not answer</th><th>Retryable?</th><th>What you do instead</th></tr></thead><tbody>
     <tr><td><code>BelowRetentionFloor { requested, floor }</code></td><td>what the store held at a sequence whose versions compaction has already dropped</td><td>no</td><td>fork at or above the floor, or from a branch that pinned it</td></tr>
     <tr><td><code>TimestampBelowHorizon { requested, horizon_floor }</code></td><td>the nearest sequence to a timestamp it can no longer resolve exactly</td><td>no</td><td>read <code>timeline_horizon</code> and ask inside it</td></tr>
     <tr><td><code>CompactionPinRaced { unsampled_anchor }</code></td><td>that an output built against a weaker promise is still valid</td><td><b>yes</b> — the job retries next cycle</td><td>nothing; it is internal, and <code>compaction_pin_races</code> counts it</td></tr>
@@ -1626,7 +1523,7 @@ module.exports['skv-errors'] = {
     <tr><td><code>BranchFenced</code></td><td>that a handle naming a deleted or superseded incarnation means the live one</td><td>no</td><td>re-resolve the branch by name</td></tr>
     <tr><td><code>ViewDepthExceeded { depth }</code></td><td>that resolution can degrade gracefully past 64 ancestors</td><td>no</td><td><code>detach</code> somewhere on the chain</td></tr>
     </tbody></table>
-    <p style="font-size:.82rem;opacity:.72;margin:.7rem 0 0">Read the second column top to bottom: in every case an approximate answer was available and cheap, and was declined. Three newer refusal paths — a fork sequence before its parent's creation, a detach whose owner was fenced mid-copy, and a checkpoint whose drain timed out — reuse existing variants rather than adding new ones, so this list is the taxonomy and not an exhaustive index of call sites.</p>`,
+    <p style="font-size:.82rem;opacity:.72;margin:.7rem 0 0">Three newer refusal paths — a fork sequence before its parent's creation, a detach whose owner was fenced mid-copy, and a checkpoint whose drain timed out — reuse existing variants rather than adding new ones, so this list is the taxonomy and not an exhaustive index of call sites.</p>`,
 };
 
 module.exports['skv-decision-log'] = {
@@ -1635,21 +1532,193 @@ module.exports['skv-decision-log'] = {
   body: `<table class="cmp"><thead><tr><th>Decision</th><th>What was rejected</th><th>Why</th></tr></thead><tbody>
     <tr><td><b>One global sequence counter; a branch is a ceiling on it</b></td><td>a per-branch clock and head</td><td>two branches' sequences become directly comparable, so an entire view is definable by one integer — which is what lets a fork cost one metadata record</td></tr>
     <tr><td><b>Ownership in component metadata</b></td><td><code>branch_id</code> prefixed into every physical key</td><td>keeps a key's version chain contiguous and every compaction job single-owner; branch deletion becomes component reclamation instead of a range delete over live data</td></tr>
-    <tr><td><b>Inherited views are logical</b></td><td>a bounded fork-delta table carrying the parent's unflushed rows</td><td>the child resolves the parent's live memtables under its cap, so every fork point is already exact — the table was a copy, and the point of a fork is that there isn't one</td></tr>
+    <tr><td><b>Inherited views are logical</b></td><td>a bounded fork-delta table carrying the parent's unflushed rows</td><td>the child resolves the parent's live memtables under its cap, so every fork point is already exact without copying them</td></tr>
     <tr><td><b>Caps applied per layer, before the k-way merge</b></td><td>one snapshot filter over the merged stream</td><td>once layers interleave, which ceiling applied to which row is gone; a post-merge filter emits rows no reader was allowed to see</td></tr>
     <tr><td><b>Retention anchors are a set</b></td><td>pin the lowest / pin the highest / range-pin to the highest</td><td>the lowest hands a higher fork a version never current at its anchor; the highest starves the lowest; the range makes one fork-at-head retain the parent's whole history</td></tr>
     <tr><td><b>The pin is an additive override</b></td><td>rewriting compaction's retention rules</td><td>with no children, output is byte-identical to a store that never forked — branching cannot regress the unbranched engine by construction rather than by testing</td></tr>
     <tr><td><b>Pins come from the durable catalog only</b></td><td>deriving pins from live snapshots or child state manifests</td><td>otherwise compaction's output depends on who happened to be reading, and a crash could lose a promise that existed only in a reader's memory</td></tr>
-    <tr><td><b>Numbered immutable lineages, published by hard link</b></td><td>a rewritten-and-renamed MANIFEST file</td><td>rename is not compare-and-swap; conditional create plus a byte-compare makes retries idempotent for free</td></tr>
+    <tr><td><b>Numbered immutable lineages, published by hard link</b></td><td>a rewritten-and-renamed MANIFEST file</td><td>rename is not compare-and-swap; conditional create plus a byte-compare leaves an interrupted retry indistinguishable from a completed one</td></tr>
     <tr><td><b>Deletion tombstones are retired</b></td><td>keeping every tombstone forever</td><td>otherwise lifetime create count, not concurrent live branches, consumes the 4,096-record cap — and monotone generations already fence a reused id</td></tr>
     <tr><td><b>A separate materialization lock</b></td><td>holding <code>catalog_publish</code> across a detach's copy</td><td>an O(dataset) copy must not block unrelated catalog operations</td></tr>
     <tr><td><b>Diff scans owned components and filters by sequence</b></td><td>a commit change journal</td><td>a branch's own components contain only its own writes, so the scan is already proportional to the diff — and detach materialises inherited rows into those tables, so the filter is load-bearing anyway</td></tr>
     <tr><td><b>The merge base is the source snapshot at the consumed cursor</b></td><td>using the previous target head as the base</td><td>merging into a target never mutates the source, so target-only values at that edge were never source history; treating them as a common base silently overwrites the target</td></tr>
     <tr><td><b>Data commits first, edge second</b></td><td>recording the edge first</td><td>a crash between them re-offers applied work, which converges or conflicts; the other order advances past changes never written and loses them silently</td></tr>
-    <tr><td><b>Merges go through the ordinary commit path</b></td><td>a privileged bulk-apply path</td><td>conflict detection, WAL and sequence allocation come for free, and there is no second write path to keep correct</td></tr>
-    <tr><td><b><code>chunks</code> is reported, not promised</b></td><td>claiming merges are atomic</td><td>the data's size decides, not the call — so the honest interface is to tell you and let you assert</td></tr>
-    <tr><td><b>Refuse rather than approximate</b></td><td>nearest-match timestamps, invented merge bases, best-effort forks</td><td>a fork that quietly lost rows would be worse than a refused one</td></tr>
+    <tr><td><b>Merges go through the ordinary commit path</b></td><td>a privileged bulk-apply path</td><td>conflict detection, WAL and sequence allocation are already on that path, and there is no second write path to keep correct</td></tr>
+    <tr><td><b><code>chunks</code> reports how many transactions the merge took</b></td><td>claiming merges are atomic</td><td>the data's size decides, not the call, so the count is returned for the caller to check</td></tr>
+    <tr><td><b>Refuse rather than approximate</b></td><td>nearest-match timestamps, invented merge bases, best-effort forks</td><td>an approximate answer does not announce itself, so a caller cannot tell it from an exact one</td></tr>
     <tr><td><b>Registry and level sets keyed by owner in a <code>HashMap</code></b></td><td>a lock-free registry; a <code>Vec</code> scanned linearly</td><td>branch count must not enter a point read's cost; lock-freedom is a recorded optimisation, not a v1 need</td></tr>
-    <tr><td><b>Arenas right-sized lazily; the write buffer is a soft limit</b></td><td>chunked arenas; a hard resident-memory cap</td><td>an idle branch should allocate nothing, and rotation cannot release an immutable arena until its flush completes — so a "budget" would have been a name promising something the design does not provide</td></tr>
+    <tr><td><b>Arenas right-sized lazily; the write buffer is a soft limit</b></td><td>chunked arenas; a hard resident-memory cap</td><td>an idle branch should allocate nothing, and rotation cannot release an immutable arena until its flush completes, so the limit is soft rather than a hard cap</td></tr>
     </tbody></table>`,
+};
+
+// --- the four designs, read in sequence as alternatives to the same problem -------------------
+// One shared box vocabulary and one shared scale, so the four can be compared at a glance.
+
+module.exports['skv-design-prefix'] = {
+  title: 'A branch id in every key',
+  type: 'svg',
+  body: svg('0 0 720 200', (() => {
+    let o = '';
+    // the design: the id becomes part of the physical key
+    o += label(20, 22, 'branch id in every key', 'start', 0.85);
+    o += obox(20, 30, 104, 28, 'branch_id', null, { hot: 1 });
+    o += obox(130, 30, 210, 28, 'user_key', null, {});
+    // one keyspace, so a key's versions sort apart by prefix
+    o += label(20, 80, 'one keyspace', 'start', 0.68);
+    [['b1 · user:3', 0], ['b1 · user:7', 1], ['b2 · user:3', 0], ['b2 · user:7', 1]].forEach(([t, split], i) => {
+      const y = 88 + i * 26;
+      o += `<rect x="20" y="${y}" width="220" height="22" rx="5" fill="${split ? fade(C.red) : 'none'}" stroke="${split ? C.red : 'currentColor'}" stroke-width="1.1"${split ? '' : ' opacity="0.4"'}/>`;
+      o += `<text x="130" y="${y + 15}" text-anchor="middle" font-size="10.5" fill="${split ? C.red : 'currentColor'}"${split ? '' : ' opacity="0.75"'}>${t}</text>`;
+    });
+    o += `<path d="M248,125 L256,125 M252,125 L252,177 M248,177 L256,177" stroke="${C.red}" stroke-width="1.3" fill="none"/>`;
+    o += `<text x="264" y="155" font-size="10.5" fill="${C.red}">user:7, split</text>`;
+    // and one read has to visit each prefix
+    o += label(550, 22, 'a read of user:7', 'middle', 0.85);
+    o += arrow(545, 32, 470, 84, 'gray');
+    o += arrow(555, 32, 630, 84, 'gray');
+    o += obox(400, 86, 140, 30, 'seek b1·', null, {});
+    o += obox(560, 86, 140, 30, 'seek b2·', null, {});
+    o += label(550, 148, 'one seek per prefix', 'middle', 0.68);
+    return o;
+  })()),
+};
+
+module.exports['skv-design-copy'] = {
+  title: 'A copy of the store per branch',
+  type: 'svg',
+  body: svg('0 0 720 196', (() => {
+    let o = '';
+    o += label(140, 22, 'main · 14,203 rows', 'middle', 0.85);
+    o += label(580, 22, 'the fork', 'middle', 0.85);
+    // the same rows, twice
+    for (const x of [20, 460]) {
+      o += `<rect x="${x}" y="34" width="240" height="100" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+      for (let i = 0; i < 5; i++) o += `<rect x="${x + 20}" y="${50 + i * 16}" width="200" height="11" rx="2" fill="currentColor" opacity="0.18"/>`;
+    }
+    for (let i = 0; i < 5; i++) o += arrow(266, 55.5 + i * 16, 454, 55.5 + i * 16, 'gray');
+    // what the fork writes
+    o += `<rect x="230" y="156" width="260" height="30" rx="7" fill="${C.purple}" stroke="${INK}" stroke-width="1.7"/>`;
+    o += `<text x="360" y="176" text-anchor="middle" font-size="11.5" font-weight="700" fill="${INK}">14,203 rows written at the fork</text>`;
+    return o;
+  })()),
+};
+
+module.exports['skv-design-cat'] = {
+  title: 'Per-branch roots over a content-addressed tree',
+  type: 'svg',
+  body: svg('0 0 720 192', (() => {
+    let o = '';
+    o += label(20, 22, 'nodes named by content hash', 'start', 0.85);
+    // one root pointer per branch
+    o += label(134, 48, 'main', 'end', 0.7);
+    o += label(324, 48, 'feature', 'end', 0.7);
+    o += obox(140, 30, 90, 28, 'a91', null, {});
+    o += obox(330, 30, 90, 28, 'c04', null, { hot: 1 });
+    o += obox(90, 92, 90, 28, '7f2', null, { dash: 1 });
+    o += obox(380, 92, 90, 28, 'b3e', null, {});
+    o += obox(290, 154, 90, 28, '2d9', null, { dash: 1 });
+    o += obox(470, 154, 90, 28, '9c1', null, {});
+    // one write copies the path leaf → root; every untouched subtree is reused
+    o += arrow(178, 60, 140, 90, 'gray');
+    o += arrow(360, 60, 178, 90, 'gray', true);
+    o += arrow(400, 60, 418, 90, 'gray');
+    o += arrow(410, 122, 348, 152, 'gray', true);
+    o += arrow(440, 122, 500, 152, 'gray');
+    o += label(580, 106, 'dashed = shared', 'start', 0.62);
+    o += label(580, 124, 'solid = newly written', 'start', 0.62);
+    return o;
+  })()),
+};
+
+module.exports['skv-design-ceiling'] = {
+  title: 'A ceiling on one shared counter',
+  type: 'svg',
+  body: svg('0 0 720 194', (() => {
+    let o = '';
+    const X = (s) => 200 + (s - 5) * 13;
+    o += label(20, 22, 'one commit sequence', 'start', 0.85);
+    o += `<line x1="200" y1="48" x2="700" y2="48" stroke="currentColor" stroke-width="1" opacity="0.3"/>`;
+    for (const s of [10, 20, 30, 40]) {
+      o += `<line x1="${X(s)}" y1="43" x2="${X(s)}" y2="53" stroke="currentColor" stroke-width="1" opacity="0.4"/>`;
+      o += `<text x="${X(s)}" y="68" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.65">${s}</text>`;
+    }
+    // the one number a fork writes
+    o += `<line x1="${X(25)}" y1="40" x2="${X(25)}" y2="76" stroke="${INK}" stroke-width="2.2"/>`;
+    o += `<rect x="${X(25) - 44}" y="20" width="88" height="20" rx="5" fill="${C.purple}" stroke="${INK}" stroke-width="1.5"/>`;
+    o += `<text x="${X(25)}" y="34" text-anchor="middle" font-size="10.5" font-weight="700" fill="${INK}">anchor 25</text>`;
+    // the parent retains; the child holds nothing of its own until it writes
+    o += `<rect x="20" y="92" width="320" height="70" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+    o += `<text x="180" y="112" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">parent</text>`;
+    for (let i = 0; i < 3; i++) o += `<rect x="${44 + i * 100}" y="122" width="84" height="26" rx="4" fill="currentColor" opacity="0.16"/>`;
+    o += obox(380, 92, 320, 70, 'child', 'no components yet', { dash: 1 });
+    o += arrow(X(25) - 6, 78, 280, 90, 'gray');
+    o += arrow(X(25) + 6, 78, 540, 90, 'gray');
+    o += label(180, 182, 'retains pinned versions', 'middle', 0.65);
+    o += label(540, 182, 'reads under the cap', 'middle', 0.65);
+    return o;
+  })()),
+};
+
+module.exports['skv-architecture-map'] = {
+  title: 'The parts of a branch, and how they connect',
+  type: 'svg',
+  body: svg('0 0 720 348', (() => {
+    let o = '';
+    const X = (s) => 215 + (s - 5) * 13;
+    const A = X(25);
+    // the shared counter, and the one number every other part is arranged around
+    o += label(20, 30, 'one sequence counter', 'start', 0.85);
+    o += `<line x1="215" y1="52" x2="700" y2="52" stroke="currentColor" stroke-width="1" opacity="0.3"/>`;
+    for (const s of [10, 20, 30, 40]) {
+      o += `<line x1="${X(s)}" y1="47" x2="${X(s)}" y2="57" stroke="currentColor" stroke-width="1" opacity="0.4"/>`;
+      o += `<text x="${X(s)}" y="70" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.6">${s}</text>`;
+    }
+    o += `<rect x="${A - 44}" y="16" width="88" height="20" rx="5" fill="${C.purple}" stroke="${INK}" stroke-width="1.5"/>`;
+    o += `<text x="${A}" y="30" text-anchor="middle" font-size="10.5" font-weight="700" fill="${INK}">anchor 25</text>`;
+    o += `<line x1="${A}" y1="36" x2="${A}" y2="62" stroke="${INK}" stroke-width="2.2"/>`;
+    o += `<line x1="${A}" y1="62" x2="${A}" y2="232" stroke="${INK}" stroke-width="1.6" stroke-dasharray="5,4" opacity="0.75"/>`;
+    // the catalog: the durable record, and the only thing a fork writes
+    o += label(100, 84, 'what a fork writes', 'middle', 0.62);
+    o += `<rect x="20" y="90" width="160" height="94" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+    o += `<text x="100" y="110" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">catalog</text>`;
+    ['branches', 'parents', 'anchors · 25'].forEach((t, i) => {
+      const y = 118 + i * 21;
+      o += `<rect x="32" y="${y}" width="136" height="17" rx="4" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3"/>`;
+      o += `<text x="100" y="${y + 12}" text-anchor="middle" font-size="9.5" fill="currentColor" opacity="0.72">${t}</text>`;
+    });
+    // one grid: both branches hold the same two kinds of component, fed by the counter
+    o += label(375, 112, 'parent', 'middle', 0.85);
+    o += label(575, 112, 'child', 'middle', 0.85);
+    o += label(270, 142, 'memtable', 'end', 0.68);
+    o += label(270, 174, 'level sets', 'end', 0.68);
+    for (const x of [290, 490]) {
+      for (const y of [124, 156]) {
+        o += `<rect x="${x}" y="${y}" width="170" height="28" rx="6" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.4"/>`;
+      }
+    }
+    o += arrow(375, 62, 375, 98, 'gray');
+    o += arrow(575, 62, 575, 98, 'gray');
+    o += label(648, 96, 'every commit', 'middle', 0.6);
+    // the read stack: the branch's own layer first, then the parent's under the anchor
+    o += label(20, 214, 'the read stack', 'start', 0.85);
+    o += label(575, 196, 'only rows it wrote', 'middle', 0.6);
+    o += `<rect x="500" y="204" width="180" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.5"/>`;
+    o += `<text x="590" y="221" text-anchor="middle" font-size="10.5" font-weight="600" fill="currentColor">child layer</text>`;
+    o += `<rect x="200" y="250" width="480" height="26" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.5"/>`;
+    o += `<text x="440" y="267" text-anchor="middle" font-size="10.5" font-weight="600" fill="currentColor">parent layer · capped at 25</text>`;
+    o += arrow(650, 186, 650, 202, 'gray');
+    o += arrow(300, 186, 250, 248, 'gray');
+    o += arrow(620, 232, 620, 248, 'gray');
+    o += arrow(A, 232, A, 248, 'purple');
+    // the pin the catalog derives, and the component that has to consult it
+    o += `<rect x="200" y="292" width="170" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+    o += `<text x="285" y="312" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">retention pin</text>`;
+    o += label(285, 328, 'versions to keep', 'middle', 0.6);
+    o += `<rect x="460" y="292" width="220" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.45"/>`;
+    o += `<text x="570" y="312" text-anchor="middle" font-size="11.5" font-weight="700" fill="currentColor">compaction</text>`;
+    o += label(570, 328, 'consults the pin', 'middle', 0.6);
+    o += arrow(100, 186, 204, 294, 'gray');
+    o += arrow(372, 314, 458, 314, 'gray');
+    return o;
+  })()),
 };

@@ -53,9 +53,14 @@
   "fs-head-race": { "g": "FSHeadRace", "t": "Expected-head compare-and-swap", "s": "one winner per round, typed conflicts for the rest" },
   "fs-provenance": { "g": "FSProvenance", "t": "Who wrote this byte?", "s": "one indexed lookup, three record-link hops" },
   "fs-three-doors": { "g": "FSThreeDoors", "t": "Three surfaces, one kernel", "s": "different commit counts, identical roots" },
+  "skv-lsm-basics": { "g": "SKVLsmBasics", "t": "An LSM tree, operated by hand", "s": "put → memtable → flush → SSTable → compact" },
+  "skv-architecture": { "g": "SKVArchitecture", "t": "The components an operation touches", "s": "one layout · fork, write, read and merge stepped across it" },
+  "skv-checkpoint-vs-branch": { "g": "SKVCheckpointVsBranch", "t": "Checkpoint and branch, side by side", "s": "one starting store · create, write, read, delete" },
+  "skv-compaction-pins": { "g": "SKVCompactionPins", "t": "A compaction job with anchors in the way", "s": "sample → merge → decide → publish" },
+  "skv-branch-options": { "g": "SKVBranchOptions", "t": "Four ways to build a branch", "s": "the same four steps under each design" },
   "skv-one-clock": { "g": "SKVOneClock", "t": "One clock, many branches", "s": "every commit draws from the same counter" },
   "skv-per-layer-caps": { "g": "SKVPerLayerCaps", "t": "Where the cap is applied", "s": "per layer before the merge, or once after it" },
   "skv-anchor-policy": { "g": "SKVAnchorPolicy", "t": "What compaction must keep", "s": "place forks, then try each retention policy" },
   "skv-moving-base": { "g": "SKVMovingBase", "t": "A merge base that moves", "s": "fork_at · source_through · target_at" },
-  "skv-merge-chunks": { "g": "SKVMergeChunks", "t": "Atomic, or merely resumable", "s": "the data decides, so chunks is reported" }
+  "skv-merge-chunks": { "g": "SKVMergeChunks", "t": "Atomic, or resumable", "s": "chunks depends on the size of the data" }
 }

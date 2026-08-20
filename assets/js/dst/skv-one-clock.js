@@ -8,7 +8,7 @@
  * therefore a CAP on that one number: min(snapshot seq, every fork anchor on the path to an ancestor),
  * narrowed nearest-first down the parent chain (src/snapshot.rs). Two consequences are visible here:
  * no two commits anywhere share a position on the axis, and every branch's own commits land to the
- * right of its own anchor — which is why copy-on-write shadowing needs no bookkeeping at all.
+ * right of its own anchor, so a child's write is the newest version of any key it inherited.
  * Exposes window.SKVOneClock.init(id).
  */
 (function () {
@@ -103,10 +103,10 @@
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
         stats: [{ id: 'seq', label: 'global seq' }, { id: 'branches', label: 'branches' },
                 { id: 'cap', label: "this reader's cap" }, { id: 'depth', label: 'chain depth' }],
-        cap: "A commit's position on the rail IS its global sequence — no two commits anywhere share one. "
+        cap: "A commit's position on the rail is its global sequence, and no two commits anywhere share one. "
            + 'Switch reader and watch the cap narrow: min(visible head, every anchor on the path). Notice that '
            + "every branch's own commits sit to the RIGHT of its own anchor, which is why a child's write always "
-           + 'outranks anything it inherited without a flag or a shadow table.',
+           + 'outranks anything it inherited.',
       });
       c = K.palette();
       svg = root.querySelector('.dstk-svg');
@@ -299,7 +299,7 @@
       st.speed = sp;
       refreshReaderOptions();
       pp(); setLock(false); drawScene(); render();
-      K.addLog(logBody, `↺ reset to seed ${seed} — same seed, same commits at the same sequences`, 'hl');
+      K.addLog(logBody, `↺ reset to seed ${seed} — this seed puts every commit back at the sequence it had`, 'hl');
     }
 
     function pp() {

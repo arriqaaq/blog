@@ -1,5 +1,5 @@
 /**
- * SKV Merge Chunks (dst-kit) — atomic, or merely resumable, decided by the data and not the call.
+ * SKV Merge Chunks (dst-kit) — atomic or resumable, decided by the size of the data.
  *
  * The post's point: surrealkv bounds a merge's writes at the memtable size and reports how many
  * transactions it took. MergeOutcome::chunks is documented as "One means it landed atomically; more
@@ -96,7 +96,7 @@
 
     function build() {
       root.innerHTML = K.container({
-        title: 'Atomic, or merely resumable', sub: 'chunks is data-dependent — so it is reported, not promised',
+        title: 'Atomic, or resumable', sub: 'chunks depends on the size of the data, so it is returned to the caller',
         controls: controls(), viewBox: `0 0 ${W} ${Hh}`, uid,
         stats: [{ id: 'writes', label: 'writes' }, { id: 'chunks', label: 'chunks' },
                 { id: 'applied', label: 'applied' }, { id: 'verdict', label: 'verdict' }],
@@ -197,7 +197,7 @@
       }
 
       const foot1 = K.el('text', { x: 18, y: Hh - 24, 'font-size': 9.5, fill: c.muted }, content);
-      foot1.textContent = 'Nothing in the call decides atomicity — the size of the data does. A single entry above the budget is refused up front as MergeTooLarge.';
+      foot1.textContent = 'The size of the data decides atomicity, not anything passed to the call. A single entry above the budget is refused up front as MergeTooLarge.';
       const foot2 = K.el('text', { x: 18, y: Hh - 9, 'font-size': 9.5, fill: c.muted }, content);
       foot2.textContent = 'A chunk count of 0 means there was nothing to write; 1 means one transaction; anything more means you must not assume the merge was atomic.';
     }
@@ -246,7 +246,7 @@
         const last = st.done === st.chunks.length;
         if (st.chunks.length === 1) {
           K.addLog(logBody, `⏭ the whole merge committed in one transaction — ${ch.items.length} keys, `
-            + `${mib(ch.bytes)} MiB. chunks = 1, so this really was all-or-nothing`, 'ok');
+            + `${mib(ch.bytes)} MiB. chunks = 1, so it landed all-or-nothing`, 'ok');
         } else {
           K.addLog(logBody, `⏭ chunk ${st.done} of ${st.chunks.length} committed: ${ch.items.length} keys, `
             + `${mib(ch.bytes)} MiB — durable on its own, which is not the same promise as the merge being atomic`,

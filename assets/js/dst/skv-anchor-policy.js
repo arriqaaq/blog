@@ -147,7 +147,7 @@
         cap: 'Click the strip (or press ⑂) to place a fork anchor BETWEEN two versions — the only case where the '
            + 'policies disagree. Then switch policy: "pin the lowest" hands a reader a value that was already stale at '
            + 'its anchor, "pin the highest" starves the lower fork, and "range to highest" is correct at the price of '
-           + 'never dropping anything. Only the set is both correct and affordable.',
+           + 'never dropping anything. The set answers every anchor while retaining fewer versions than the range.',
       });
       c = K.palette();
       svg = root.querySelector('.dstk-svg');
@@ -269,7 +269,7 @@
     async function fork(atSeq) {
       if (st.busy) return;
       if (st.anchors.length >= MAXA) {
-        K.addLog(logBody, `⑂ four anchors is enough to make the point — delete one first`, 'warn'); return;
+        K.addLog(logBody, `⑂ four anchors is the maximum here — delete one first`, 'warn'); return;
       }
       const seq = atSeq != null ? atSeq : gapAnchor();
       if (seq == null) { K.addLog(logBody, '⑂ no gap wide enough — write another version first', 'warn'); return; }
@@ -317,7 +317,7 @@
       const wrong = st.verdicts.filter((x) => x.kind !== 'ok');
       const pol = POLICIES[st.policy];
       if (!st.anchors.length) {
-        K.addLog(logBody, `✂ compacted under "${pol}": no anchors, so only the newest version survives — exactly as an unbranched store would do`, 'ok');
+        K.addLog(logBody, `✂ compacted under "${pol}": no anchors, so only the newest version survives — the same output an unbranched store would produce`, 'ok');
       } else if (!wrong.length && st.policy === 'range') {
         K.addLog(logBody, `✂ compacted under "${pol}": every reader is correct, and ${st.kept.length} of ${st.versions.length} `
           + `versions were retained — correct, and nothing is ever reclaimed`, 'warn');
@@ -355,7 +355,7 @@
       st.speed = sp; st.policy = pol;
       root.querySelector('.t-policy').value = pol;
       recompute(); pp(); setLock(false); drawScene(); render();
-      K.addLog(logBody, `↺ reset to seed ${seed} — same seed, same version gaps, same anchors, every time`, 'hl');
+      K.addLog(logBody, `↺ reset to seed ${seed} — this seed always lays the versions and anchors out the same way`, 'hl');
     }
 
     function pp() {
@@ -393,7 +393,7 @@
         const seq = Math.round(invX(loc.x));
         if (seq <= 0) return;
         if (st.versions.some((v) => v.seq === seq)) {
-          K.addLog(logBody, `⑂ ${seq} is exactly on a version — the interesting anchors sit BETWEEN two of them`, 'warn');
+          K.addLog(logBody, `⑂ ${seq} is exactly on a version — the policies only differ for anchors sitting BETWEEN two versions`, 'warn');
           return;
         }
         fork(seq);

@@ -3,6 +3,11 @@
 This is a **static blog**, authored in **Markdown**, built by a small bespoke Node script (no framework).
 The flagship post is a deterministic-simulation-testing (DST) build log with interactive animated widgets.
 
+> **Writing or editing any post, diagram title, or widget caption? Read [`STYLE.md`](STYLE.md) first.**
+> It documents the house tone (humble and informative), the constructions that are banned and why,
+> how sections and diagrams are structured, and a pre-ship checklist. It exists because the same
+> mistakes were made and corrected many times over; do not rediscover them.
+
 ## Build & run
 
 ```bash

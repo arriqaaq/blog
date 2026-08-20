@@ -9,7 +9,7 @@
  * The reason the target head cannot serve as the base: merging into a target never mutates the source,
  * so target-only values present at that edge were never incorporated into source history — treating
  * them as a common base makes a later source edit look uncontested and overwrites the target.
- * Turn the edge off, merge twice, and watch the second merge re-litigate the first.
+ * Turn the edge off, merge twice, and watch the second merge re-offer the first merge's changes.
  * Exposes window.SKVMovingBase.init(id).
  */
 (function () {
@@ -211,7 +211,7 @@
       });
 
       const foot = K.el('text', { x: 18, y: Hh - 8, 'font-size': 9.5, fill: c.muted }, content);
-      foot.textContent = 'Absence counts as a value throughout, which is what makes delete-vs-delete converge and delete-vs-modify conflict with no special cases.';
+      foot.textContent = 'Absence counts as a value throughout, so delete-vs-delete converges and delete-vs-modify conflicts without a special case for either.';
     }
 
     function stat(k, v) {
@@ -280,7 +280,7 @@
         drawScene(); render();
         const names = conflicts.map((r) => r.key).join(', ');
         K.addLog(logBody, `⇉ Strict refused: MergeConflicts { count: ${conflicts.length} } on ${names} — `
-          + `nothing was written, which is the point of the default`, 'err');
+          + `nothing was written`, 'err');
         await K.delay(dur(420)); st.busy = false; setLock(false); return;
       }
 
@@ -325,7 +325,7 @@
       drawScene(); render();
       K.addLog(logBody, st.edge
         ? '🔗 promotion edge on — the base will advance with each merge'
-        : '🔗 promotion edge off — the base is pinned to the fork point. Merge again and watch it re-litigate.', 'hl');
+        : '🔗 promotion edge off — the base is pinned to the fork point. Merge again to see the earlier changes re-offered.', 'hl');
     }
 
     async function play() {
@@ -352,7 +352,7 @@
       root.querySelector('.t-edge').textContent = `🔗 Promotion edge: ${edge ? 'on' : 'off'}`;
       st.rows = plan();
       pp(); setLock(false); drawScene(); render();
-      K.addLog(logBody, `↺ reset to seed ${seed} — same keys, same values, same verdicts`, 'hl');
+      K.addLog(logBody, `↺ reset to seed ${seed} — this seed produces the same values, so the verdicts repeat`, 'hl');
     }
 
     function pp() {
