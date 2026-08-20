@@ -79,7 +79,7 @@ shapes cycled for 7,000 words. Watch for:
 | Tell | Count found in one draft | Fix |
 |---|---|---|
 | `X rather than Y` | **32** | Say X. Drop the contrast, or make it a second sentence. |
-| Em-dash asides | **92**, one per 80 words | Budget roughly one per 3–4 paragraphs. Most become a full stop. |
+| Em-dash asides | **92**, one per 80 words | Cut to **≈1.5 per 1,000 words**. See §2c — "one per 3–4 paragraphs" was too generous and produced a later draft with 56. |
 | Sentences that only announce a count | **~25** | Deliver in the same sentence: "A Git push has two components: a *packfile* and a *reference transaction*." |
 | `which is what/why …` appositive tails | **13** | End the sentence. |
 | `X, not Y` bare apposition | **9** | Keep at most a couple in a whole post. |
@@ -92,6 +92,62 @@ shapes cycled for 7,000 words. Watch for:
 as **I** or **we** as appropriate. A post with zero second person reads like documentation generated
 about a system rather than someone explaining their own work. Vary sentence length deliberately:
 the reference post ranges from 7 words to 40. Informality and humour are welcome.
+
+## 2c. The six mechanical tells
+
+Found by auditing `content/branching-lsm.md` after it had already passed §2 and §2b. These are
+*mechanical* and they are what makes a draft read as machine-written even when the vocabulary is
+clean. Counts are from that one post.
+
+**1. Announcement sentences that carry no content** — 51 found. A sentence whose only job is to say
+that an explanation is coming. `Now the thing that isn't here.` · `Now the wart, because it's a real
+one.` · `It also settles a problem that names alone can't.` · `Atomicity is the part people assume
+and shouldn't.` · `That last sentence is the bill.` · `Everything so far has been machinery.` A short
+marker that hands straight off in the same breath is fine (`Here's the issue.` then the issue); a
+sentence *describing* the coming content is not.
+
+**2. Em-dash appositive asides, `— like this —`** — 32 in body prose. Use a comma, a full stop, or
+nothing. The worst split a subject from its verb by 20–30 words. The reference has **8 em-dashes in
+5,111 words**; it carries asides in parentheses instead (38 of them).
+
+**3. Circumlocution — describing a thing that already has a name** — 31 found. `the queue every write
+passes through on its way to being ordered and made durable` for *the commit queue*. `the register of
+who is currently reading` for *the snapshot tracker*. `the allocator that hands out ids for new
+tables`. Includes position-references that name nothing: `The first concerns…`, `The second guard
+covers a related shortcut.`, `These are the four things you actually call.`
+
+**4. Over-explanation and restatement** — 32 sites. One idea, then the same idea in different words:
+a post-comma clause repeating its own main clause, a paragraph restating the doc comment quoted
+directly above it, three reasons offered for a one-reason fact. Ban `which means`, `which is to say`,
+`in other words`.
+
+**5. Hedge and filler vocabulary** — 74 instances. By frequency in that draft: `exactly` (12),
+`at all` (12), `actually` (6), `quietly` (5), `turns/turned out` (5), `worth X` (4), `genuinely` (4),
+`whatsoever` (3), `simply` (3), `entirely` (3), then `precisely`, `deliberately`, `happily`,
+`honestly`, `promptly`, `cheerfully`, and `the best thing I can say about it`.
+
+**6. Reader-coaching instead of informing** — 24 instances. `you'll meet`, `don't infer`, `read that
+as`, `worth knowing`, `the way out is`, `if you've ever chased a compaction bug`. State the fact; the
+reader ranks it.
+
+### Explaining jargon: substitute, don't annotate
+
+A reader without the codebase cannot follow a sentence whose subject is an internal identifier. The
+fix is to **replace the jargon with a plain short name**, not to append a clause explaining it.
+Appending grew this post by 1,210 words and introduced most of the six tells above.
+
+> `the commit pipeline — the queue every write passes through on its way to being ordered and made
+> durable` (34 words) → `the commit queue` (3 words)
+
+Explain a concept properly only where a reader is genuinely blocked from following the next sentence,
+and do it once, in a clause, at first use. Everything else gets substituted or cut. Keep the real
+type name available in the code blocks and the References list rather than in every sentence.
+
+### Fix these by rewriting sections, not by patching
+
+Both times a version of this post shipped with these problems, the cause was grep-and-patch editing.
+Rhythm and redundancy live across consecutive sentences, so they cannot be found or fixed one match
+at a time. Rewrite the affected section from an outline and a fact list.
 
 ## 3. Intro
 
@@ -171,9 +227,27 @@ cost *shapes* instead.
 
 ## 6. Diagrams
 
-- **One idea per figure.** This is the actual rule. There is **no label budget** — Cursor's packfile
-  figure carries 60+ labels and works, because it makes one point. An earlier pass here imposed
-  "≤15 labels"; that was invented, not observed.
+- **One idea per figure.** This is the actual rule. There is **no label budget** — measured from the
+  reference's own markup, its packfile figure carries **583 `<text>` elements** (a real 392-byte
+  hexdump, 54 SHA-named objects, 80 bands binding object to byte range, and a *correct* PACK header).
+  Earlier passes here guessed "≤15 labels" and then "60+"; both were invented. The runner-up carries
+  63. Our densest is 67.
+- **A figure states no conclusion.** Grep the reference's nine diagrams for
+  `good|bad|fast|slow|better|worse|winner|loser|chosen|best|fail|success` and you get **zero hits**.
+  Every label there is an identifier (`pack-7d9a.pack`, `etag e2`, `tx #42`), a component name
+  (`S3 · OBJECT STORE`), a protocol phase (`PRE-COMMIT`, `GET · 304`), or a live state readout
+  (`objects 0/54 · round-trips 0`, `needs 5 / 5 acks`). This post had **28 verdict words across 19 of
+  34 figures** — "refused", "accepted", "the walk stops", "wins", "leaked". Replace each with a
+  readout or an identifier; the prose draws the conclusion.
+- **Real data, reused across figures.** 7 of the reference's 10 figures carry real identifiers, and
+  they form one continuous trace: `etag e0` in one figure is `e1` in the next and `e2` in the third;
+  the same 54 SHA prefixes appear in two figures. This post had a real user key in only **4 of 34**
+  figures and named an SSTable in only **2**. Pick one worked example — real branch ids, generations,
+  table names, sequence numbers — and reuse it everywhere.
+- **Captions are rare; alt text carries the explanation.** Only 2 of the reference's 10 figures have
+  a caption. Every one has an authored 60–180 word `aria-label` describing the mechanism — that is
+  where sentences go instead of into the SVG. `svg()` in `build/diagrams-svg.js` emits no
+  `aria-label`; adding one is the right home for the prose currently drawn inside figures.
 - **Sentences belong in the prose, not inside the SVG.** Figures that grew past ~700 characters of
   text were paragraphs rendered as SVG. The prose can say it better.
 - **Neutral titles.** A title names what the figure shows: `The fork protocol: fence, drain,

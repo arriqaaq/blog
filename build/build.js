@@ -155,8 +155,22 @@ const countWords = (html) => html
 // ---------- shared template chrome (identical look to the legacy build) ----------
 const FONT = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..800&display=swap" rel="stylesheet">';
 
+// ---------- provenance badge (AI disclosure) ----------
+// frontmatter: `made: hand` or `made: assisted`
+const PROV = {
+  hand: 'Written without AI',
+  assisted: 'Written with AI assistance',
+};
+
+function provHtml(value, warn) {
+  if (!value) { warn('no "made:" in frontmatter (AI disclosure)'); return ''; }
+  const state = String(value).trim().toLowerCase();
+  if (!PROV[state]) { warn(`made: unknown value "${state}" (want ${Object.keys(PROV).join(' or ')})`); return ''; }
+  return `<span class="prov" data-p="${state}">${PROV[state]}</span>`;
+}
+
 const POST_CSS = `
-  :root{ color-scheme:light; --fg:#1a1a1a; --bg:#f2f1eb; --alt:#f8f8f5; --muted:#5f6152; --rule:#e0ded3;
+  :root{ color-scheme:light; --fg:#1a1a1a; --bg:#f2f1eb; --alt:#f8f8f5; --muted:#5f6152; --rule:#e0ded3; --rule-strong:#b9b6a3;
     --neon:#d9f400; --neon-dim:#c2db00; --warm:#ffa440; --olive:#657220; --accent:#657220;
     --code:rgba(26,26,26,.05); --quote:rgba(101,114,32,.09);
     --hl-comment:#8b8d7a; --hl-keyword:#4d7c0f; --hl-type:#b45309; --hl-fn:#2563eb;
@@ -181,6 +195,14 @@ const POST_CSS = `
   h1{ font-family:'Inter',system-ui,sans-serif; font-weight:800; font-size:2.7rem; line-height:1.04; margin:0 0 .7rem; letter-spacing:-.03em; }
   .dek{ font-size:1.16rem; color:var(--muted); margin:0 0 1.1rem; max-width:60ch; }
   .byline{ font-family:'JetBrains Mono',ui-monospace,monospace; font-size:.76rem; letter-spacing:.02em; color:var(--muted); border-top:1px solid var(--rule); padding-top:.9rem; }
+  /* AI-disclosure badge. Solid neon = written by hand, hatched = AI-assisted. */
+  .prov{ display:inline-flex; align-items:center; gap:.4rem; padding:.2rem .55rem;
+    font-family:'JetBrains Mono',ui-monospace,monospace; border:1px solid var(--rule-strong);
+    border-radius:999px; font-weight:600; font-size:.66rem; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--fg); white-space:nowrap; }
+  .prov::before{ content:''; width:8px; height:8px; border-radius:50%; border:1px solid var(--neon-dim); }
+  .prov[data-p=hand]::before{ background:var(--neon); }
+  .prov[data-p=assisted]::before{ background:repeating-linear-gradient(135deg,var(--neon) 0 2px,transparent 2px 4px); }
   .toc{ max-width:740px; margin:1.4rem auto 0; padding:1rem 1.1rem; background:var(--alt); border:1px solid var(--rule); border-radius:12px; }
   .toc h2{ font-family:'JetBrains Mono',ui-monospace,monospace; font-size:.68rem; text-transform:uppercase; letter-spacing:.14em; color:var(--olive); margin:.1rem 0 .7rem; border:0; padding:0; }
   .toc ol{ list-style:none; margin:0; padding:0; }
@@ -190,9 +212,16 @@ const POST_CSS = `
   article{ font-size:1.07rem; }
   /* Prose keeps a ~740px reading measure, centered; figures (.fig) span the full 1000px wrap. */
   .sec > :not(.fig){ max-width:740px; margin-left:auto; margin-right:auto; }
-  h2{ font-family:'Inter',system-ui,sans-serif; font-weight:700; font-size:1.62rem; line-height:1.16; margin:2.6rem 0 .9rem; letter-spacing:-.02em; border-top:1px solid var(--rule); padding-top:2rem; }
-  .sec:first-of-type h2{ border-top:0; padding-top:.4rem; margin-top:.6rem; }
-  h3{ font-family:'Inter',system-ui,sans-serif; font-weight:700; font-size:1.18rem; margin:1.8rem 0 .6rem; letter-spacing:-.01em; }
+  /* Section boundary: the gap must read as clearly larger than a figure gap (.fig is 2rem),
+     and the rule has to be visible against --bg, which 1px of --rule was not. */
+  h2{ font-family:'Inter',system-ui,sans-serif; font-weight:700; font-size:1.62rem; line-height:1.16; margin:4.4rem 0 1rem; letter-spacing:-.02em; border-top:2px solid var(--rule-strong); padding-top:2.4rem; }
+  /* The first .sec is the intro chunk before the first <h2>, so it holds no h2 and the
+     original .sec:first-of-type rule never matched. The first heading lives in the NEXT section. */
+  .sec:first-of-type h2, .sec:first-of-type + .sec h2{ border-top:0; padding-top:.4rem; margin-top:.6rem; }
+  /* h3 was a smaller copy of h2 — same family, same weight. A left accent bar makes it
+     unmistakably subordinate without a second full-width line competing with h2. */
+  h3{ font-family:'Inter',system-ui,sans-serif; font-weight:600; font-size:1.2rem; margin:2.9rem 0 .7rem; letter-spacing:-.01em; border-left:3px solid var(--neon-dim); padding-left:.72rem; }
+  h4{ font-family:'JetBrains Mono',ui-monospace,monospace; font-weight:600; font-size:.78rem; text-transform:uppercase; letter-spacing:.11em; color:var(--olive); margin:2rem 0 .55rem; }
   p{ margin:0 0 1.05rem; } strong{ font-weight:700; }
   a{ color:var(--fg); text-decoration:underline; text-decoration-color:var(--neon-dim); text-decoration-thickness:2px; text-underline-offset:2px; }
   a:hover{ background:var(--neon); text-decoration-color:transparent; }
@@ -257,6 +286,7 @@ function renderPost(srcFile) {
   const eyebrow = data.eyebrow ? `<div class="eyebrow">${esc(data.eyebrow)}</div>` : '';
   const dek = data.dek ? `<p class="dek">${esc(data.dek)}</p>` : '';
   const byline = `${data.byline ? esc(data.byline) + ' ' : ''}~${words.toLocaleString()} words · ${state.mounts.length} interactive widgets · ${state.usedSvgs.size} diagrams`;
+  const prov = provHtml(data.made, (w) => state.warnings.push(w));
 
   const post = `<!doctype html>
 <html lang="en" data-mode="light">
@@ -272,6 +302,7 @@ ${FONT}
   <h1>${esc(data.title)}</h1>
   ${dek}
   <p class="byline">${byline}</p>
+  ${prov}
 </header>
 <nav class="toc"><h2>Contents</h2><ol>
 ${tocHtml}

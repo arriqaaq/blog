@@ -24,6 +24,7 @@ eyebrow: Deterministic Simulation Testing   # small label above the H1 (optional
 slug: the-seed-contract           # optional; defaults to the filename
 date: 2026-06-09                  # optional; newest sorts first on the index
 byline: A build log on …          # optional; the build appends "~N words · M widgets · K diagrams"
+made: assisted                    # required; AI-disclosure badge — `assisted` or `hand`
 draft: true                       # optional; if true, the post is skipped
 ---
 

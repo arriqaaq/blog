@@ -6,49 +6,46 @@ slug: branching-lsm
 date: 2026-08-17
 ogImage: skv-ceiling
 byline: "A build log on a personal experiment: adding git-style branching to an LSM key-value store, with each mechanism running live on the page."
+made: assisted
 ---
 
-Agents need somewhere to work that they can break. Handing one a scratch copy of a repository is routine, and a container is easier still. The database is the part that's hard to hand over, because a copy of it costs a copy of the data.
+Agents need somewhere to work that they can break. So I started with an experiment to [build a filesystem on a database ([SurrealDB](https://surrealdb.com/))](https://arriqaaq.com/blog/posts/agent-filesystem.html) so that every action could say who wrote it and be rolled back on its own. That worked, somewhat. But giving each agent its own copy of the database underneath got expensive.
 
-I came at this sideways, from [building a filesystem on a database](https://arriqaaq.com/blog/posts/agent-filesystem.html) so that every byte could say which action wrote it and be rolled back on its own. That part worked. Giving each agent its own copy of the database underneath it — an embedded SurrealDB over SurrealKV — was where the idea got expensive.
+So I spent a while making that copy cheap, on [my fork](https://github.com/arriqaaq/surrealkv) of [SurrealKV](https://github.com/surrealdb/surrealkv): git-style branching, with a fork, a diff and a merge, built into an LSM tree instead of beside one.
 
-So I spent a while trying to make that copy cheap. I did it on [my fork](https://github.com/arriqaaq/surrealkv) of [SurrealKV](https://github.com/surrealdb/surrealkv), an embedded key-value store: git-style branching, with a fork, a diff and a merge, built on top of an LSM tree instead of beside one. I wanted to know what it takes and where the bill ends up. It does end up somewhere, and finding out where was most of the work.
-
-Three cases want a branch, and they want different things from it. An **agent sandbox** lives for seconds or minutes, gets thrown away, and has to be undoable. A **dev, test or preview environment** lives for hours or days, and you want tens of them at once without standing up tens of stores. **Time travel and audit** wants to read the past exactly, where "yesterday at about 09:14" is worse than an error — an error tells you it failed, and an approximation leaves you to guess how wrong it is.
+Three cases want a branch, and they want different things from it. An *agent sandbox* lives for seconds or minutes, gets thrown away, and has to be undoable. A *dev, test or preview environment* lives for hours or days, and you want tens at once without standing up tens of stores. *Time travel and audit* wants to read the past exactly. "Yesterday at about 09:14" is worse than an error: an error tells you it failed, an approximation leaves you guessing how wrong it is.
 
 [[SVG:skv-use-cases]]
 
-What those three share is that branches are mostly numerous and mostly short-lived. I sized the design for that: tens at a time, plus a way out for the one that turns out to be permanent.
+Branches here are numerous and short-lived, and that's what I sized the design for: tens at a time, plus a way out for the one that turns out to be permanent.
 
-Two things up front. None of this is released and the names may still move, and nothing here is benchmarked — where I describe a cost below I mean its shape and the metric that would show it, never a number I measured. Every mechanism is named with its real type and the file it lives in, so you can check any of it against the fork.
+None of this is released and the names may still move. Nothing here is benchmarked, so every cost below is a shape and the metric that would show it, never a number I measured. Every mechanism is named with its real type and the file it lives in, so you can check it against the fork.
 
 ## How an LSM tree works {#lsm-primer}
 
-A key-value store has to put each write somewhere, and that choice decides everything else. A B-tree puts it in the page where the key belongs, which scatters small random writes all over the disk — the one access pattern storage hardware handles worst. A **log-structured merge tree** takes the opposite bet: never modify data where it sits, only ever append.
+Every key-value store has to answer one question: where does a write go? A B-tree puts it in the page where the key belongs, so writes land in small chunks scattered across the disk, the access pattern storage hardware handles worst. A log-structured merge tree (LSM tree, from here on) takes the opposite bet: never modify data where it sits, only ever append.
 
-- A write is appended to a **write-ahead log** first, so it survives a crash.
-- Then it goes into the **memtable**, an in-memory buffer that keeps keys sorted so reads can be served straight out of it.
-- When the memtable fills, it is written to disk in one sequential pass as an **SSTable**, an immutable sorted file. Fresh tables land in level 0, where their key ranges are allowed to overlap.
-- Reads therefore have to check the memtable and every table that might hold the key, so a background job called **compaction** merges overlapping tables into fewer, larger, non-overlapping ones further down — L1, L2 and so on, each level roughly ten times the size of the one above it. Every table carries a **bloom filter**, a small summary that lets a read skip a table that certainly doesn't hold the key.
-- A **delete** is a write too: it appends a **tombstone**, a marker saying the key is gone, and the old value stays on disk until some compaction removes the pair together.
+A write goes to a write-ahead log first (a WAL, an append-only file that exists so a crash can't lose an acknowledged write). Then into the memtable, an in-memory buffer that keeps keys sorted so reads can be served straight out of it. When the memtable fills, it is written to disk in one sequential pass as an SSTable, an immutable sorted file. Fresh tables land in level 0, where key ranges may overlap, so a read checks the memtable and then every table that might hold the key.
 
-That lifecycle is worth operating by hand. Put a few keys and watch the memtable flush; put the same key twice and find both versions sitting on disk; then compact, and watch the older one leave.
+Reads get slower as tables pile up. A background job called compaction merges overlapping tables into fewer, larger, non-overlapping ones further down: L1, L2, and so on, each level about ten times the size of the one above. Every table carries a bloom filter, a small summary that lets a read skip a table which certainly doesn't hold the key. And a delete is a write: it appends a tombstone, a marker saying the key is gone, and the old value sits on disk until some compaction removes the pair.
+
+Those seven parts are the machine, and the lifecycle repays operating by hand. Put a few keys and watch the memtable flush. Put the same key twice and find both versions on disk. Then compact, and watch the older one leave.
 
 [[WIDGET:skv-lsm-basics]]
 
-SurrealKV implements all of that without surprises — a skiplist memtable, a segmented write-ahead log, leveled compaction, a block cache, bloom filters. If you have read one LSM engine you have read most of this one.
+SurrealKV implements all of it without surprises: a skiplist memtable, a WAL split into fixed-size segments so old ones can be deleted whole, leveled compaction, bloom filters, and a block cache holding recently-read chunks of SSTable in memory. If you've read one LSM engine you've read most of this one.
 
 [[SVG:skv-lsm-anatomy]]
 
-Appending has a side effect that everything later leans on. Nothing is overwritten in place, so when you write `user:7` a second time the first value is still sitting on disk, superseded and still perfectly readable, and it stays that way until some compaction decides nobody can reach it any more.
+Appending has a side effect. Nothing is overwritten in place, so write `user:7` a second time and the first value is still on disk, superseded and perfectly readable, until some compaction decides no reader can reach it.
 
 ## What's hard about branching a store {#hard}
 
-Say you have a 40 GB store in about 2,000 SSTables, and you want a copy of it you can write to. You could just copy it. At 40 GB you might even get away with that. Try it ten times on the same host and you won't.
+Say you've got a 40 GB store in about 2,000 SSTables, and you want a copy of it you can write to. You could just copy it. At 40 GB you might get away with that once. Try it ten times on one host and you won't.
 
-The good news is that an LSM tree already contains two of the three things a cheap copy needs.
+But an LSM tree already contains two of the three things a cheap copy needs.
 
-**Every write draws a sequence number** — one monotonically increasing integer per commit. In SurrealKV that number doesn't sit beside the key, it sits inside it. The internal key is the user's key followed by two big-endian `u64`s:
+The first is a sequence number on every write, one increasing integer per commit. In SurrealKV it doesn't sit beside the key, it sits inside it. The internal key is the user's key followed by two big-endian `u64`s:
 
 ```rust
 // src/lib.rs
@@ -64,93 +61,69 @@ pub(crate) fn make_trailer(seq_num: u64, kind: InternalKeyKind) -> u64 {
 }
 ```
 
-Fifty-six bits of sequence and eight of kind: `Set`, `Delete`, `SoftDelete`, `Merge`, `RangeDelete` and a handful more. The timestamp is a selector for time-travel queries and orders nothing at all.
+That's 56 bits of sequence and 8 of kind (`Set`, `Delete`, `SoftDelete`, `Merge`, `RangeDelete`, and a handful more). The timestamp is a selector for time-travel queries and orders nothing. Internal keys sort by user key ascending, then by sequence descending, so every version of one key sits together, newest first. A reader after the current `user:7` seeks to `user:7` and takes the first entry it lands on.
 
-Internal keys sort by user key ascending and then by sequence *descending*, which packs every version of one key together, newest first. A reader after the current `user:7` seeks to `user:7` and takes the first entry it lands on.
+The second is that visibility is a filter on that number. Ask for `user:7` at sequence 40 and the engine walks past every version stamped 41 or higher. Nothing about that is branch-flavoured. It's plain snapshot isolation: a reader handed one sequence number at the start stops seeing anything committed after it, and a scan that runs for a minute misses the writes landing during that minute.
 
-**Visibility is a filter on that number.** A read at sequence *s* ignores every version above *s*. Nothing about this is branch-flavoured; it's plain snapshot isolation, the reason a reader is handed a single sequence number when it starts and stops seeing anything committed afterwards, and the reason a scan that runs for a minute doesn't see the writes that land during that minute.
-
-**Compaction is the one component that destroys anything.** Reads destroy nothing, and writes destroy nothing either, since a write adds a version and a delete adds a tombstone. Compaction is where a superseded version becomes unreachable, and it's the only place in the engine where that decision gets made.
+The third thing is missing. Compaction is the only component that destroys anything. Reads destroy nothing, and writes destroy nothing either, since a write adds a version and a delete adds a tombstone. Compaction is where a superseded version becomes unreachable.
 
 [[SVG:skv-primitives]]
 
-Put the first two together and reading the store as it stood at sequence *s* already works, for any *s* whose versions happen to still be on disk. That last clause is the third thing branching needs, and it's the one the engine doesn't offer: nothing anywhere has promised compaction will keep the versions *s* depends on.
+Put the first two together and reading the store as it stood at sequence *s* works, for any *s* whose versions happen to still be on disk. Nothing has promised compaction will keep the versions *s* depends on.
 
-A snapshot doesn't close that gap. It hands you a sequence number to read at, and compaction agrees to keep everything that number can see, but there's no way to write to a number, and the agreement lapses the moment your reader goes away. A snapshot is built to lapse — a reader somebody forgot about would otherwise pin history forever — and that same expiry is why a snapshot can't stand in for a branch.
+A snapshot doesn't fix it. It hands you a sequence number to read at, and compaction agrees to keep everything that number can see. But you can't write to a number, and the deal lapses the moment your reader goes away. Snapshots are built to lapse, or a reader somebody forgot would pin history forever.
 
-SurrealKV already had the next thing along, in `src/checkpoint.rs`. A checkpoint flushes the mutable state, hard-links every SSTable the manifest references, and copies the level manifest and the metadata. Your 40 GB copy therefore links about 2,000 files, so the work scales with the file count instead of the byte count — a real improvement, and not enough, because from that moment on the two stores share nothing. Each side compacts on its own schedule, rewriting its own copy of tables that started out byte-identical, and your 40 GB drifts toward 80 GB.
-
-A fork writes one catalog record and links nothing whatsoever. Read a key that neither side has touched and it still comes out of one shared table.
+SurrealKV already had the next thing along, in `src/checkpoint.rs`. A checkpoint flushes the mutable state, hard-links every SSTable the manifest references, then copies the level manifest and the metadata. Your 40 GB copy links about 2,000 files, so the work scales with the file count instead of the byte count. That's a real improvement. But from then on the two stores share nothing. Each side compacts on its own schedule, rewriting its own copy of tables that started out byte-identical, and your 40 GB drifts toward 80 GB. A fork writes one catalog record and links nothing. Read a key neither side has touched and it comes out of one shared table: the same block, the same file, the same cache.
 
 [[WIDGET:skv-checkpoint-vs-branch]]
 
-Two more things a checkpoint costs you, both easy to miss until you want them. There's no diff and no merge back, because the two stores no longer share a sequence number to compare against. And it's whole-store, so you can't check out part of one.
+A checkpoint costs you two more things. There's no diff and no merge back, because the two stores no longer share a sequence number to compare against. And it's whole-store, so you can't check out part of one.
 
 [[SVG:skv-checkpoint-vs-fork]]
 
-So a fork has to skip the copy and keep a read path into its parent instead, which means the parent can no longer forget anything that path is able to reach.
+So a fork skips the copy and keeps a read path into its parent. The parent can no longer forget anything that path can reach.
+
 ## Four ways to build a branch {#options}
 
-Four designs turn up for this, and between them they cover most of what shipping systems actually do: tag every key with a branch id, copy the store, replace the LSM with a content-addressed tree, or cap the sequence counter. They differ in what each one does to a fork, a read, a branch deletion, and compaction.
+Four designs turn up for this, and between them they cover most of what shipping systems do: tag every key with a branch id, copy the store, replace the LSM with a content-addressed tree, or cap the sequence counter. They differ in what each does to a fork, a read, a branch deletion, and compaction.
 
 ### A branch id in every key
 
-Prefix the branch id onto the key and a fork writes nothing at all. The appeal is genuine, and this is the design most people reach for first, partly because plenty of multi-tenant schemas already prefix a tenant id the same way, so it arrives feeling proven.
+Prefix the branch id onto the key and a fork writes nothing. This is the design most people reach for first, partly because plenty of multi-tenant schemas prefix a tenant id the same way, so it arrives feeling proven.
 
 [[SVG:skv-design-prefix]]
 
-The trouble starts one layer down. Prefixing mixes every branch's rows into a single keyspace, so a compaction job can no longer be scoped to one branch, because there is no physical boundary left between them to scope it to. Deleting a branch stops being a metadata edit and becomes a range delete over live data.
+But it doesn't work. Prefixing mixes every branch's rows into one keyspace, so a compaction job can no longer be scoped to a single branch: there's no physical boundary left to scope it to. Deleting a branch stops being a metadata edit and becomes a range delete over live data.
 
-Worse, one key's versions are no longer contiguous on disk. `b1·user:7` and `b2·user:7` sort nowhere near each other, so the newest-first walk that made a point read cheap now has to run once per branch on the fork path, turning a read at fork depth *d* into *d* separate scans. And a table's bloom filter can't answer "do you hold `user:7`" any more; it can only answer "do you hold `b1·user:7`", which means asking it once per prefix. Contiguous versions and one bloom-filter probe per table are the two things an LSM read path is built out of, and putting the branch in the key gives up both.
+Worse, one key's versions are no longer contiguous on disk. `b1·user:7` and `b2·user:7` sort nowhere near each other. The newest-first walk that made a point read cheap has to run once per branch on the fork path, so a read at fork depth *d* becomes *d* separate scans. And a table's bloom filter can't answer "do you hold `user:7`" any more, only "do you hold `b1·user:7`", so it has to be asked once per prefix. Contiguous versions and one bloom probe per table are what an LSM read path is built out of, and this gives up both.
 
 ### A copy per branch
 
-The design a checkpoint already gives you, and the baseline the other three are measured against.
-
-[[SVG:skv-design-copy]]
-
-It is correct and completely isolated, and the fork copies every row, so the cost grows with the size of the store rather than the size of the change. Nobody picks this on purpose at 40 GB; plenty of people end up with it anyway.
+This is what a checkpoint gives you, and the baseline the other three get measured against. It's correct and fully isolated. The fork copies every row, so cost grows with the size of the store instead of the size of the change. It's hard to pick on purpose at 40 GB, and easy to end up with anyway.
 
 ### A content-addressed tree
 
-Name every node by the hash of its contents, make a branch a root pointer, and let a write copy the path from leaf to root while sharing every subtree it didn't touch. Git does exactly this. So does Dolt, whose prolly trees are a content-addressed B-tree built for structural sharing between versions.
+Name every node by the hash of its contents, make a branch a root pointer, and let a write copy the path from leaf to root while sharing every subtree it didn't touch. Git does this. So does Dolt, whose prolly trees are a content-addressed B-tree built for structural sharing between versions.
 
 [[SVG:skv-design-cat]]
 
-It works, and diff is close to free, because two equal subtrees have equal names and can be skipped wholesale. The catch is scope: it replaces an LSM tree instead of extending one. MVCC, compaction and crash recovery all have to be re-derived over a new address space, which is a rewrite of the engine wearing the disguise of a feature.
+It works, and diff is cheap: two equal subtrees have equal names and can be skipped wholesale. The catch is scope. It replaces an LSM tree instead of extending one, so everything that engine already solved has to be solved again over a new address space: keeping several versions of a row readable at once, reclaiming the ones nobody needs, and coming back up correctly after a crash. That's a rewrite of the engine wearing the disguise of a feature.
 
 ### A ceiling on one counter
 
-A branch is a maximum sequence number it is allowed to read of anything it inherited. Neon does something structurally similar at the page level, where a branch is a point in the WAL and reads below that point are served out of the parent's history.
+A branch is a maximum sequence number it may read of anything it inherited. Neon does something similar at the page level: a branch is a point in the WAL, and reads below that point are served out of the parent's history.
 
 [[SVG:skv-design-ceiling]]
 
-The fork writes one metadata record and moves no data. Reads walk the branch's own components first and then its parent's, capped at that number. Deleting a branch reclaims the components the branch itself wrote. The cost doesn't disappear — it moves into compaction, which now has to be told which superseded versions are still somebody's current value. This is the design I built, and almost everything awkward about it traces back to that last sentence.
+The fork writes one metadata record and moves no data. Reads walk the branch's own components first, then its parent's, capped at that number. Deleting a branch reclaims the components the branch wrote. The cost doesn't disappear, it moves: compaction now has to be told which superseded versions are still somebody's current value.
 
-Running the same four steps under each design is more useful than reading the comparison. Fork, let the child write a key, let it read a key it inherited, then delete it — the scoreboard keeps every design you've already run, so the bills stack up side by side.
+Run the same four steps under each design. Fork, let the child write a key, let it read a key it inherited, then delete it. The scoreboard keeps every design you've run, so the bills stack up side by side.
 
 [[WIDGET:skv-branch-options]]
 
-## A ceiling on one counter {#design}
+## The design {#design}
 
-A branch here is a parent link and an integer. Six parts turn that into something you can fork, read, write and merge: a sequence counter, a fork anchor, a catalog, per-branch components, a layer stack and a retention pin.
-
-[[SVG:skv-architecture-map]]
-
-- The **sequence counter** issues a number to every commit in the store, on every branch. There is exactly one.
-- A branch's **fork anchor** is one of those numbers, and it is the highest sequence that branch may read of anything it inherited.
-- The **catalog** records which branches exist, who each one's parent is, and what its anchor is. It is the durable copy of all that, and a fork is a write to it.
-- Every branch has its **own components** — its own memtable and level sets, holding only the rows that branch wrote itself.
-- A read walks the **layer stack**: your branch's components first, then each ancestor's, capped at the lowest anchor on the path.
-- Compaction consults a **retention pin** built from the catalog, listing the superseded versions it may not discard.
-
-Stepping one operation at a time shows which of the six each one touches. A fork writes the catalog and moves no data; a write lands in your branch's own components and takes its sequence from the shared counter; a read walks the stack; a merge reads a diff, commits the data, then records an edge.
-
-[[WIDGET:skv-architecture]]
-
-### One clock for the whole store {#one-clock}
-
-There is one global sequence counter, and every commit on every branch draws the next number from it. Branches have no clocks of their own, and there is no per-branch head:
+I picked the ceiling. Behind it is a single global sequence counter: every commit on every branch draws the next number from it, and a branch is one of those numbers plus a parent link. Branches have no clocks of their own:
 
 ```rust
 // src/branch.rs
@@ -160,56 +133,54 @@ There is one global sequence counter, and every commit on every branch draws the
 pub last_write_seq: Option<u64>,
 ```
 
-One counter makes any two branches' sequence numbers directly comparable. That is what buys the cheap fork and the cheap merge: with per-branch clocks, relating two branches needs a vector clock, a mapping table or a causality graph, and with one clock everything a branch may see of everything it inherits is a single integer.
+One counter makes any two branches' sequence numbers directly comparable. With per-branch clocks, relating two branches needs a vector clock, a mapping table or a causality graph. With one clock, everything a branch may see of everything it inherits is a single integer.
 
 [[SVG:skv-ceiling]]
 
-A branch's view is a ceiling. Nothing is copied and there is no second history to filter, only one history and a cap on how much of it this branch can see. A snapshot's read version is the same idea without the durability, and the difference is the whole feature: a snapshot dies with its reader, while this ceiling survives the reader, survives restart, and has room to be written on top of.
+So a branch's view is a ceiling: one history, and a cap on how much of it this branch can see. Unlike a snapshot's read version, that cap survives its reader, survives restart, and has room to be written on top of.
 
-Put commits from several branches on the shared axis and two things show up. No two dots anywhere share a horizontal position, because the store has a single ordering; and every branch's own commits sit to the right of its own anchor.
+Put commits from several branches on the shared axis and two things show up. No two dots share a horizontal position, because the store has a single ordering. And every branch's commits sit to the right of the point it was forked at, its anchor from here on.
 
 [[WIDGET:skv-one-clock]]
 
-That second observation settles copy-on-write shadowing, which is usually the fiddly part. When a child writes to a key it inherited, two versions of that key exist in two different component sets, and every read on the child has to prefer the child's. Implementations often track that explicitly with a dirty set, a shadow table, a per-key override map, or a copied page. None of it is needed here. A child only writes after it forked, and every write draws from the one global counter, so a child's sequence numbers always exceed everything it inherited, including its own anchor — its write to an inherited key is simply the newest version of that key.
+Around that counter sit six parts:
 
-[[SVG:skv-shadow]]
+- the **sequence counter**, issuing a number to every commit in the store, on every branch
+- a **fork anchor** per branch, the highest sequence it may read of anything it inherited
+- the **catalog**, recording which branches exist, and each one's parent and anchor
+- each branch's **own components**: its memtable, plus the levels of SSTables that memtable flushes into (a *level set*), holding only the rows that branch wrote
+- the **layer stack** a read walks: your own components first, then each ancestor's, capped at the lowest anchor on the path
+- the **retention pin** compaction consults, listing the superseded versions it may not discard
 
-Deletion works the same way. A tombstone in the child sits at a higher sequence than the parent's row, so it hides that row without the parent knowing anything about it, and a branch can delete a row it doesn't physically hold. One consequence of that shows up again in the diff: what a branch *owns* and what a branch *wrote* are different sets, because detach materialises inherited rows into the branch's own tables at their original sequences.
+A fork writes the catalog and moves no data. A write lands in your branch's own components and takes its sequence from the shared counter. A read walks the stack. A merge reads a diff, commits the data, then records an *edge*: a durable note in the catalog saying these two branches agreed, as of these sequence numbers. Edges and anchors are both promises compaction has to keep.
 
-### Choosing the fork anchor {#fork-anchor}
+[[WIDGET:skv-architecture]]
 
-When you fork you have to say where, and that number becomes the branch's anchor. It goes into the catalog, so it outlives every reader and every restart, and a number that survives a restart is a number you can write on top of.
+If a fork copies nothing, what does the child hold, and how does it read tables that main wrote before the fork existed? And if main keeps writing afterwards, why don't those newer rows show up in the child?
 
-There are three ways to name it — the parent's current head, a specific sequence, or a point in time:
+[[SVG:skv-map]]
 
-```rust
-// src/branch.rs
-pub enum ForkPoint {
-	/// The parent's visible head at the instant of the fork, established by
-	/// draining the commit pipeline under the write fence.
-	Head,
-	/// A specific sequence, which must be at or below the drained head and at
-	/// or above the parent's retention floor.
-	AtVersion(u64),
-	/// The highest sequence committed at or before this timestamp, resolved
-	/// exactly or refused (`Error::TimestampBelowHorizon`).
-	AtTimestamp(u64),
-}
-```
+The child holds a parent pointer and a number. It gets its own memtable and levels the first time it writes, and reads everything else through main, live, at every read. Main's later writes sit right there in the memtable the child reads through. They don't show up because they carry sequences above the child's ceiling, and the walk seeks under it. Nothing is captured at fork time, so nothing can go stale.
 
-All three land on an exact sequence or fail. `AtTimestamp` resolves to the sequence committed at or before the moment you named, or it returns `TimestampBelowHorizon` — this is the audit case from the intro, where a fork that silently lands near the right moment is worse than no fork at all.
+[[WIDGET:skv-fork-lifecycle]]
 
-`Head` is the one with a surprise in it. It includes rows the parent has committed but not yet flushed, because the child resolves the parent's live state, memtables and all, instead of a set of files on disk. Nothing has to be flushed for your fork to be correct, which I had assumed I would need to build and then didn't.
+Each of those parts is a piece of the LSM engine that had to change. They come in the order a write meets them: the log, the memtable, the tables it flushes into, the manifest indexing them, the compaction rewriting them, and the read that walks the lot.
 
-[[SVG:skv-fork-anchor]]
+## The write-ahead log {#wal}
 
-Fork a branch off a branch and the anchors stack, each link contributing its own cap, and your effective ceiling is the lowest one on the path. So a grandchild can never see more of its grandparent than its parent could. That falls out of taking a minimum, and no check enforces it.
+One log serves the whole store, and every branch's commits land in it. A branch gets no log of its own and needs none: the sequence number on a record says where it sits relative to every other record, whoever wrote it.
 
-Two selectors get refused. You can't fork below the parent's own `created_at_seq`, since a child predating its parent isn't a thing. And a retried `AtTimestamp` fork is resolved again from scratch, so if that timestamp now maps to a different sequence than the first attempt used, you get a refusal instead of the old receipt.
+What each record gains is an owner. A commit batch belongs to one branch, and the record carries that owner, so replay after a crash routes each row back to the memtable that owns it.
 
-### Where the owner is named {#ownership}
+[[SVG:skv-wal-owners]]
 
-Branch identity rides in component metadata and is never prefixed into a user key or an internal key, which is how the read optimisations that the first design broke stay intact:
+The cost shows up in disk usage. A stretch of log can only be discarded once everything written into it has reached disk, and that now spans several branches. One branch that takes a single write and goes idle keeps its stretch alive, and nothing older can be cleaned up behind it. The engine reports how much log is held this way (`wal_pinned_segments`); if it climbs while your data volume doesn't, an idle branch is the reason.
+
+The single log also fixes what a timestamp means. Every commit draws from the same counter, so a moment in time maps onto one sequence: the last committed at or before it. That works only while the versions from back then survive, and compaction eventually removes them. Below that point the store cannot reconstruct the moment, so it tracks how far back it can still answer (`timeline_horizon`) and refuses anything older (`TimestampBelowHorizon`) instead of returning the nearest version left. A fork that lands near the right moment is worse than no fork, because nothing tells you how near.
+
+## The memtable {#memtable}
+
+Every branch gets its own memtable, and a memtable accepts batches from one owner. Hand it a batch belonging to anybody else and it refuses.
 
 ```rust
 // src/batch.rs
@@ -221,7 +192,23 @@ pub(crate) struct BatchOwner {
 }
 ```
 
-A commit batch carries one owner. A memtable is branch-pure and rejects a batch belonging to anybody else. Every SSTable records its owner in its own metadata, and loading the manifest fails closed if a level set's owner disagrees with what the table itself claims. The level manifest is partitioned per owner, and a read picks one partition:
+[[SVG:skv-memtable-purity]]
+
+That keeps the write path dull. Your row goes into your branch's memtable and takes its sequence from the shared counter, just as it would on main. There is no branch-aware write path to get wrong.
+
+A memtable arrives on a branch's first write, never at the fork, so an idle branch costs no memory. A thousand branches nobody has written to cost a thousand catalog records and nothing else. The memory they draw from is one shared pool with a store-wide budget (`write_buffer_soft_limit`), and the "soft" is load-bearing. A memtable's memory is not released when the branch rotates to a fresh one, only when the old one finishes flushing, and a single oversized batch gets more than the budget allows. A hard cap would mean refusing writes while accounting for memory in use, memory waiting to flush and memory mid-flush at once. That is a different allocator design, not a renamed constant.
+
+The memtable is also where copy-on-write shadowing resolves, and this is the part I expected to be hard. When a child writes to a key it inherited, two versions of that key sit in two component sets, and every read on the child has to prefer the child's. Implementations usually track that with a dirty set, a shadow table, a per-key override map, or a copied page. None of it is needed here. A child only writes after it forked, and every write draws from the one global counter, so a child's sequences always exceed everything it inherited, including its own anchor. Its write to an inherited key is the newest version of that key, and the newest-first walk finds it first.
+
+[[SVG:skv-shadow]]
+
+Deletion works the same way. A tombstone in the child sits above the parent's row, so it hides that row without the parent knowing, and a branch can delete a row it does not physically hold. What a branch *owns* and what a branch *wrote* are therefore different sets, and the diff has to deal with that.
+
+## SSTables and levels {#sstables}
+
+A memtable flush produces an SSTable, and the table records its owner in its own metadata. Loading the manifest fails closed if a level set's owner disagrees with what the table claims, so a mismatch fails at startup instead of answering wrongly later.
+
+The level manifest is partitioned per owner, and a read picks one partition:
 
 ```rust
 // src/levels/mod.rs
@@ -230,57 +217,23 @@ A commit batch carries one owner. A memtable is branch-pure and rejects a batch 
 levels_by_owner: HashMap<BatchOwner, Levels>,
 ```
 
-There is no owner-blind way to reach levels at all, so a read path can't accidentally mix owners even if somebody wants it to. Lookup is by hash, which keeps the total number of branches out of the cost of every point read and every layer of an inherited read.
+[[SVG:skv-levels-by-owner]]
+
+There's no owner-blind way to reach a level set, so a read path can't mix owners even if somebody wants it to. Lookup is by hash, which keeps the total number of branches out of the cost of every point read and every layer of an inherited read.
+
+The branch id never enters a user key or an internal key, anywhere.
 
 [[SVG:skv-key-vs-metadata]]
 
-Keeping the keys owner-free pays off three times. Compaction stays a single-owner operation because the components it reads have one owner between them, and not because some rule says it must. Deleting a branch reclaims a component set and deletes no rows. And the key comparator never learns what a branch is, so a key's versions stay contiguous and newest-first. The comparator, the bloom filters and every seek in the read path were all built around that layout.
+That one decision pays three times. Compaction stays a single-owner operation because the components it reads have one owner between them, and not because some rule says it must. Deleting a branch reclaims a component set and deletes no rows. And the key comparator never learns what a branch is, so a key's versions stay contiguous and newest-first, and a bloom filter still answers "do you hold `user:7`" in one probe.
 
-### Forking, and what it fences {#fork-protocol}
+Two components come out untouched. Bloom filters are keyed on the user key and behave as they always did, and the block cache never learns about branches. Inheriting a parent layer means one more set of filters to probe, so that cost tracks fork depth, but nothing inside either component had to change.
 
-Writing to a branch is dull. Your row goes into that branch's own memtable and takes its sequence from the shared counter, exactly as it would on main, and there is no branch-aware write path to get wrong.
+## The manifest {#manifest}
 
-Creating the branch is where the care went. The whole fork is one publication to the catalog and it copies no data:
+The manifest is how an LSM tree knows which tables sit in which level. Branching needs one thing from it the usual design can't give: a fork's commit point has to be a single durable act that either happens or doesn't.
 
-```rust
-// src/lsm.rs — fork_branch
-/// The protocol is one durable step. Under the branch-op mutex: fence
-/// writes, drain the commit pipeline so the visible head is exact, resolve
-/// the fork sequence, release the fence, then publish ONE catalog version
-/// naming the child, its parent link and its anchor. That publish is the
-/// commit point — before it nothing durable mentions the child, after it the
-/// child is fully readable with no further work, because its view is
-/// computed from the parent's live state (design §3.2).
-```
-
-[[SVG:skv-fork-protocol]]
-
-The fence stops write admission across the store and then spins until the commit pipeline reports drained, so `visible_seq_num` is exactly the head. Skip the drain and `ForkPoint::Head` resolves to a number with in-flight commits on both sides of it, leaving the child's view at neither the head nor any other well-defined point. Missing the drain deadline gives `Error::ForkFenceTimeout`, which is retryable.
-
-Publishing then checks the ancestor chain against the depth budget, `MAX_VIEW_DEPTH = 64`, and asks whether the parent can still answer at the resolved sequence:
-
-```rust
-// src/branch.rs
-/// Either the cap is at or above the retention floor — no key has lost a
-/// version that a view up there would need — or the cap is one of the pinned
-/// anchors, where compaction preserved the answer on purpose. Any other cap
-/// below the floor reads whatever happened to survive, which is a guess.
-pub(crate) fn view_is_complete_at(&self, cap: u64, retained_floor: u64) -> bool {
-	cap >= retained_floor || self.anchors.contains(&cap)
-}
-```
-
-That predicate is the reason a historical fork can be refused rather than approximated.
-
-Now the wart, because it's a real one. The fence is store-wide, and it stops writers who have no connection whatsoever to the branch being forked or to its parent. One global clock buys comparable sequence numbers everywhere, and the price is one global serialisation point: `ForkPoint::Head` briefly stalls everything. `fork_drain_nanos` divided by `forks` is the average pause each writer took on somebody else's behalf, and if you fork at head in a loop against a busy store, that's the number that will explain your p99 before anything else does.
-
-One more thing will bite you in bulk. The catalog caps at 4,096 records, and at the cap a fork stops to run a reclamation sweep before proceeding, so it blocks rather than failing. A script that creates a thousand sandboxes will meet that sweep, and it will look like a hang.
-
-### The catalog {#catalog}
-
-A fork's commit point is a single durable act, so it needs a primitive that either happens or doesn't. The usual answer in an LSM engine is a MANIFEST file: append to it, or rewrite it and rename the new one into place.
-
-Rename is atomic in one sense, since no reader ever sees a half-written file. It is not a compare-and-swap, though. It will cheerfully clobber a version somebody else wrote, so it can't express "publish this only if the state I read is still current" — which is exactly the sentence a fork needs to say.
+The usual answer is a MANIFEST file. Append to it, or rewrite it and rename the new one into place. Rename is atomic in one sense, since no reader ever sees a half-written file, but it isn't a compare-and-swap. It will clobber a version somebody else wrote, so it can't say "publish this only if the state I read is still current".
 
 So there's no MANIFEST file here. There are three numbered, immutable metadata lineages, never rewritten in place:
 
@@ -290,88 +243,57 @@ So there's no MANIFEST file here. There are three numbered, immutable metadata l
 <db>/root/<version>.root                  magic SKRT   global recovery facts
 ```
 
-Each file is magic, version, body, CRC32, and four versions of each lineage are kept. The publish primitive is a conditional create via `fs::hard_link`: linking to a name that already exists fails with `AlreadyExists`, at which point the publisher byte-compares the two and reports `AlreadyExistsSame` if the content matches.
+Each file is magic, version, body, CRC32, and four versions of each lineage are kept. Publishing creates the next numbered name as a hard link, and linking to a name that already exists fails instead of overwriting. The publisher either wins the name or finds somebody else took it, and then compares the two byte for byte and treats an identical file as its own success.
 
 [[SVG:skv-lineages]]
 
-That gives a genuine compare-and-swap on a plain filesystem, with no extra service to run. Two concurrent publishers can't silently overwrite each other, and whichever loses sees the other and fails closed. Retries are idempotent, because re-publishing identical bytes after an interrupted attempt is indistinguishable from having succeeded the first time. That property earns its keep the first time a fork gets interrupted halfway through its own commit point.
+That gives a compare-and-swap on a plain filesystem with no extra service to run. Two publishers cannot silently overwrite each other; whichever loses sees the other and refuses. And when a fork is interrupted halfway through its commit point, re-publishing the same bytes is indistinguishable from having succeeded the first time.
+
+The level manifest stays, still recording which tables are in which level, now partitioned per owner. The catalog sits above it and holds everything about branches themselves.
+
+[[SVG:skv-manifest-split]]
+
+Compaction needs the catalog while holding the level manifest. Hence the lock order.
 
 #### Names and generations
 
-The catalog is the only authority for branch existence, generation, parentage, anchors and TTLs. Names get reused; incarnations never do. Every physical owner names a `(BranchId, BranchGeneration)` pair, generations are globally monotone, and a handle to a deleted branch whose name has since been reused gets `BranchFenced` instead of quietly rebinding to whichever branch owns the name now. A merge edge naming a stale generation isn't that branch's history either, so it gets discarded.
+The catalog is the only authority on which branches exist, who their parents are, where their anchors sit and when they expire. Delete a branch called `staging` and create another with the same name, and those are two unrelated branches sharing a label. So every branch carries a counter alongside its name, bumped on reuse and never reused itself, and ownership is that pair. A handle from the first `staging` fails with `BranchFenced` instead of rebinding to the new one, and a merge edge pointing at the old one is discarded.
 
-Deletion can't just drop a branch's catalog record. At that moment its runtimes may exist, its WAL segments may be pinned, and its level state, tables and authority lineage are all still on disk, so something durable has to say "this branch is going away" or a crash mid-teardown leaves orphans that nothing will ever come back for. Deletion therefore publishes a tombstone, and `BranchCatalog::retire_deleted()` clears it later in a fixed order.
+Deleting a branch cannot just drop its catalog record. The branch may still hold live memory, a stretch of WAL, its tables and its own metadata files. Something durable has to say the branch is going away, or a crash halfway through teardown orphans all of it with nothing left to say it should be reclaimed. So deletion publishes a marker first, and a maintenance pass clears up afterwards in a fixed order. (This marker is also called a tombstone, confusingly: it is a catalog record about a branch, not the per-key marker from the primer.)
 
 [[SVG:skv-catalog-lifecycle]]
 
-Reclaim runtimes, WAL dependencies, level state and tables; then remove the state lineage directory and sync the parent directory; only then retire the tombstone in a new catalog publication. A failure anywhere before that last step leaves the tombstone in place, so the maintenance pass can retry safely as many times as it needs to. And tombstones have to be retired eventually because of that 4,096-record cap — if they lived forever, the cap would count every branch ever created instead of the branches alive now, which for a store churning agent sandboxes is a difference of several orders of magnitude.
+Release the memory, then the WAL, then the level metadata and the tables. Delete the branch's metadata directory and make sure that deletion reaches disk. Only then remove the marker, in a fresh catalog publication. A failure before that last step leaves the marker in place, so the pass can run again.
+
+The markers have to be cleared because the catalog caps at 4,096 records. If they lived forever the cap would count every branch ever created instead of the branches alive now, and for a store churning sandboxes those numbers diverge fast. At 4,096 a fork stops to run a clean-up sweep before proceeding, so it blocks rather than fails. A script creating a thousand sandboxes in a loop will meet that sweep, and it will look like a hang.
 
 #### Four locks, one order
 
-Branching added several operations that grab global state at once. A fork touches the catalog, the level manifest and the commit pipeline. A detach copies a dataset and publishes a catalog version. A checkpoint reads every table and needs metadata to hold still. Compaction runs under the level manifest and has to be able to consult the catalog. Any two of those taking the same pair of locks in opposite orders is a deadlock waiting for load.
+Branching added several operations that grab global state at once. A fork touches the catalog, the level manifest and the commit queue. A detach copies everything a branch was inheriting, then publishes a catalog version. A checkpoint reads every table and needs the metadata to hold still. Compaction holds the level manifest and consults the catalog. Any two of those taking the same pair of locks in opposite orders is a deadlock waiting for load.
 
 [[SVG:skv-lock-order]]
 
-The order is `branch_materialization`, then `catalog_publish`, then the commit pipeline write fence and the level manifest. `branch_materialization` is a plain `Mutex<()>` deliberately kept separate from `catalog_publish`, because detach copies everything a branch was inheriting, and holding the catalog serialiser across a bulk copy would block every unrelated branch operation in the store for the duration. Detach materialises first, takes `catalog_publish` only for the final parent-link publication, and re-validates the owner afterwards in case it got fenced while the copy was running.
+The order is the copy lock, then the catalog lock, then the fence that stops new writes entering the queue, then the level manifest. The first two are separate on purpose. A detach can copy a great deal of data, and holding the catalog lock that long would block every unrelated branch operation in the store. So a detach copies first, takes the catalog lock only for the small publication at the end, and re-checks its branch afterwards in case it was deleted mid-copy.
 
-The order is enforced by a test that reads the source text and asserts that `catalog_publish.lock()` appears before `level_manifest.read()`. Yes — a test that greps its own codebase. I wrote it, felt a bit silly, and kept it anyway, because lock ordering doesn't live in any single execution. It lives in the shape of the code, and running the code proves nothing at all about whether an inverted path exists down some branch you didn't take.
-## The read path {#read-stack}
+The order is enforced by a test that reads the source text and asserts `catalog_publish.lock()` appears before `level_manifest.read()`. A test that greps its own codebase. I wrote it, felt silly, and kept it, because lock ordering does not live in any single execution. It lives in the shape of the code, and running the code proves nothing about a path you didn't take.
 
-A branch owns only what it wrote. Everything else it can see belongs to an ancestor, and it may only see the part of that ancestor sitting below its anchor, so a read has to consult several component sets with a different visibility rule for each one.
+## Compaction {#compaction}
 
-A snapshot here is therefore a stack of layers walked nearest-first, each carrying its own cap:
-
-```rust
-// src/snapshot.rs — Snapshot::new_owned
-let mut cap = seq_num;
-for (branch, generation, fork_seq) in chain {
-	cap = cap.min(fork_seq);
-	layers.push(SnapshotLayer { owner: BatchOwner { branch, generation }, runtime: ..., cap });
-}
-```
-
-Walk the parent chain nearest-first, narrowing the cap monotonically as you go, and a layer's cap comes out as `min(snapshot seq, every fork anchor on the path to that ancestor)`.
-
-[[SVG:skv-read-stack-anatomy]]
-
-Inside a layer the search order is the one the engine already had: active memtable, then immutable memtables newest-first, then L0 across all overlapping tables, then L1 and below by binary search. The single difference is that each layer seeks at its own cap instead of at the snapshot sequence. The first visible version wins and the walk stops there. A tombstone in a nearer layer hides every farther layer, so a delete answers "absent" and doesn't step aside to let an ancestor answer in its place.
-
-Those per-layer caps can't be collapsed into one filter on the merged stream, and every one of a layer's iterators is wrapped before it reaches the merge:
-
-```rust
-// src/snapshot.rs
-// Every iterator of this layer is wrapped in a SeqCappedIterator
-// BEFORE the merge: per-layer fork caps cannot be expressed by
-// the merged stream's global snapshot filter.
-```
-
-Within one key, versions arrive sequence-descending, and a capped iterator walks past a key's above-cap versions down to its first visible one. A filter placed after the merge is consulted too late: by the time it runs, a different layer's row has already won the key, and the row it lets through isn't merely a wrong row somewhere in a stream — it's the answer the reader receives.
-
-[[SVG:skv-cap-before-merge]]
-
-That is a claim worth watching instead of taking on trust. Run it both ways and look at the rows that leak through in the second configuration: they are correctly ordered, they sit below the snapshot's own sequence, and nothing about them looks wrong. The only defect they have is which layer they came from, and once the streams interleave, that information is gone.
-
-[[WIDGET:skv-per-layer-caps]]
-
-## What compaction must keep {#compaction}
-
-A fork writes one record, so nearly all of the cost of branching turns up here instead. Compaction exists to discard superseded versions, and a live fork anchor is a statement that one particular superseded version is still somebody's current value. So compaction has to be told what it may not throw away, and told durably, so that a crash can't lose the instruction. It also has to be told in a way that costs nothing at all in a store nobody has forked.
+Compaction exists to discard superseded versions. A live fork anchor says one superseded version is still somebody's current value. Resolving that conflict is where nearly all the cost of branching ended up.
 
 [[SVG:skv-compaction-conflict]]
 
-Two cases are worth watching a real job handle: a store with no branches in it, where the pin should be invisible, and an anchor that appears after the job has already started merging.
+So compaction has to be told what it may not throw away: durably, so a crash cannot lose the instruction, and cheaply enough to cost nothing in a store that has never been forked.
 
 [[WIDGET:skv-compaction-pins]]
 
-### The anchor set {#anchor-set}
+The failure modes pull in opposite directions. Drop the version a child's anchor needs and its next read returns a newer row, with no error and no way to tell it is wrong. Drop the version a merge measures from, the state the two branches last agreed on, and the next merge compares against the wrong base and overwrites. Keep everything, and one long-lived branch pins its parent's history for as long as it lives.
 
-The failure modes here pull in opposite directions. Drop the version a child's anchor needs and the child's next read returns a newer row, with no error and no way to tell — a value that was never true at its fork point. Drop the version a merge's base sits at and the next merge compares against the wrong base and overwrites. Keep everything, and one long-lived branch pins its parent's entire history for as long as it exists.
+My first version kept one number per owner: the lowest sequence anybody still needed, with everything at or above it preserved. That is a retention floor, and it is the thing to build first. One integer per branch, cheap to check in a compaction loop, reusing the machinery the engine has for pinning snapshots. It lasted until I forked two branches at different points, about an afternoon.
 
-My first version kept one number per owner: the lowest sequence anybody still needed, with everything at or above it preserved. That's a retention floor, and it is honestly the thing to build first — one integer per branch, cheap to check inside a compaction loop, and it reuses the machinery the engine already has for pinning snapshots. It lasted until I forked two branches at different points, which took about an afternoon.
+Here is the case that killed it. The parent holds `user:7` at sequences 12, 24 and 31. One child forked at 20, another at 28. A floor at 20 keeps version 12 and lets compaction drop 24. The second child then reads `user:7` at its cap of 28, and the newest version left below 28 is 12, replaced eight sequences before that child existed. No error, just a row that was never current at its fork point. Raise the floor to 28 and the first child breaks the same way. Pin the whole range below 28 and the parent keeps its history for as long as anything stays forked near head, the cost the fork existed to avoid.
 
-Concretely. The parent holds `user:7` at sequences 12, 24 and 31. One child forked at 20, another at 28. A floor at 20 preserves the newest version at or below 20, which is version 12, and happily lets compaction drop 24. Now the second child reads `user:7` at its cap of 28, and the newest surviving version at or below 28 is 12 — a value that had already been replaced eight sequences before that child existed. It gets a real answer, promptly, with no error anywhere, and the answer was never true at its fork point. Raise the floor to 28 and the first child breaks the same way in the other direction. Pin the whole range below 28 instead and you retain the parent's entire history for as long as anything stays forked near head — the exact cost the fork existed to avoid.
-
-A floor is one number standing in for a set, and no single number answers for two anchors:
+A floor is one number standing in for a set, and one number cannot answer for two anchors:
 
 ```rust
 // src/branch.rs
@@ -393,15 +315,13 @@ A floor is one number standing in for a set, and no single number answers for tw
 pub(crate) struct RetentionAnchors { anchors: Vec<u64> }
 ```
 
-Anchors don't only come from children, either.
+Anchors do not only come from children.
 
 [[SVG:skv-anchor-kinds]]
 
-A live merge edge contributes two more: its target-side head, which preserves durable edge history, and its source-side cursor, which preserves the actual three-way base. A stale edge pins nothing whatsoever — its source is gone, no future merge can measure from that base, and holding history on behalf of a deleted branch is how a store that churns sandbox branches would quietly stop reclaiming anything.
+A live merge edge contributes two more, its target-side head and its source-side cursor. A stale edge pins nothing: its source is gone, and no future merge can measure from that base. Holding history for a deleted branch is how a store churning sandboxes stops reclaiming anything. The set is sorted descending, deduplicated, and never truncated, because dropping an anchor drops the promise it represents.
 
-The set is kept sorted descending and deduplicated, and it is never truncated to save space, because dropping an anchor drops the promise the anchor represents.
-
-Honouring *n* anchors over *m* versions looks like it should cost *n × m* comparisons. It doesn't, because both lists are sorted the same way:
+Honouring *n* anchors over *m* versions looks like it should cost *n × m* comparisons. It does not, because both lists are sorted the same way:
 
 ```rust
 // src/branch.rs
@@ -423,21 +343,15 @@ One index that never rewinds, so the pass costs `O(versions + anchors)` for any 
 
 [[SVG:skv-anchor-walker]]
 
-The four policies only disagree when an anchor falls between two versions, which is exactly the case that is fiddly to construct by hand and easy to construct by dragging. Place the anchors where you like and run each policy against the same version chain — both the set and the range answer every anchor correctly, and only the retained count separates them. The argument for the set is a counter, not a correctness bug, which is worth knowing before you go implementing it.
+The four policies only disagree when an anchor falls between two versions. Both the set and the range answer every anchor correctly, and only the retained count separates them.
 
 [[WIDGET:skv-anchor-policy]]
 
-### Where the pins come from {#pin-source}
+Where the pins come from matters as much as what is in them. The tempting source is the live snapshot tracker: in memory, already there, and it knows who is reading right now. It is wrong twice over. Compaction's output would depend on who happened to be reading when the job ran, so two runs over identical inputs could produce different files, and an unreproducible compaction has unrepeatable bugs. And a promise in a reader's memory does not survive a crash, while a fork anchor is durable enough for a process that never saw the reader to honour it. So pins come from the catalog and nothing else.
 
-Compaction needs to know which sequences it must preserve, and the tempting source is the live snapshot tracker: it's in memory, it's already there, and it knows precisely who is reading right now.
+One thing does get shared, and it surprised me. There is a single snapshot tracker for the store, so one branch's live snapshot pins visibility for every owner's compaction. A long-running read on a throwaway sandbox holds versions on main.
 
-It's the wrong source, for two separate reasons. Compaction's output would start depending on who happened to be reading when the job ran, so two runs over identical inputs could produce different files, which makes the component unreproducible and its bugs unrepeatable — and if you have ever chased a compaction bug you know how much that costs. Beyond that, a promise living in a reader's memory doesn't survive a crash, while a fork anchor is durable precisely so that a process which never saw the original reader can still honour it.
-
-So retention pins come from the durable catalog, never from the snapshot tracker and never from child state manifests. Both pin shapes below are deterministic for the same reason: they depend on catalog anchors and never on which snapshots happen to be live. It is also why compaction has to be able to read the catalog while holding the level manifest, and that requirement is where the lock order came from.
-
-### The pin only adds retention {#additive-pin}
-
-Compaction already had rules for deciding whether to write a version out or discard it, and those rules know nothing about branches. The pin doesn't replace them; it's one extra condition OR'd onto the answer they give:
+The pin itself is weak by design. Compaction already had rules for writing a version out or discarding it, and those rules know nothing about branches. The pin does not replace them. It is one extra condition OR'd onto the answer they give:
 
 ```rust
 // src/iter.rs
@@ -450,9 +364,9 @@ if pinned_by_child_view && !output_ignoring_pin {
 }
 ```
 
-`output_ignoring_pin` is the pre-branching answer. Because the pin can only flip a false to a true, it turns a discard into a keep and never the reverse, so in a store with no branches `pinned_by_child_view` is always false and every byte compaction writes is what it would have written before branching existed. The `||` is doing that work, and no test has to stand behind it.
+The first condition is the answer compaction would have given before branching existed. The second asks whether some branch still needs this version. An or can only turn a discard into a keep, never the reverse, so that byte-identical behaviour is a property of the operator and not something a test has to keep honest.
 
-What the pin actually pins depends on whether the parent keeps history at all:
+What the pin covers depends on the parent. A store can keep old versions of a key and let you read them back, or keep only the current value and treat everything older as garbage the moment it is superseded. A child of the first inherits a readable history, so a view capped anywhere inside it might ask for any version under the cap. A child of the second sees one value per key, whatever was current at its anchor:
 
 ```rust
 // src/iter.rs
@@ -466,15 +380,15 @@ What the pin actually pins depends on whether the parent keeps history at all:
 
 [[SVG:skv-pin-shapes]]
 
-Tens of branches stay affordable because of the per-anchor shape; a versioned parent pays the range shape to keep its own history honest.
+A versioned parent pays the whole range, the price of having promised its readers a history.
 
-Two guards sit outside the pin entirely. The first is `force_not_bottom`. A compaction may treat its highest level as the bottom of the read stack, where tombstones can be dropped outright, only if nothing reads below it — and two unrelated conditions break that assumption. A branch that has been forked from has anchored readers resolving below its tombstones. A branch that is itself a fork child has ancestor layers sitting underneath its own bottom level.
+Two guards sit outside the pin, and the first is the bottom level. A compaction on the deepest level it has normally knows nothing reads below it, so tombstones can be dropped there instead of written out again. Branching breaks that twice. A branch that has been forked from has readers resolving below its tombstones. A branch that is itself a fork child has its parent's layers under its own deepest level.
 
 [[SVG:skv-two-bottoms]]
 
-Either way, the level that looks like the bottom isn't, and dropping tombstones there would resurrect rows for somebody.
+Either way the level that looks like the bottom is not, and dropping tombstones there would resurrect rows for somebody. `force_not_bottom` is the flag that stops it.
 
-The second guard covers the bottom-level hard-delete shortcut, where a key whose newest version is a hard delete can leave the database entirely, outputting nothing and dropping the tombstone with it. Its precondition:
+The second guard covers hard deletes. A soft delete hides a key but leaves its history reachable; a hard delete removes the key and everything behind it. When a hard delete is the newest thing on a key, compaction at the bottom level can drop the whole key and write nothing out. That is legal under one condition:
 
 ```rust
 // src/iter.rs — hard_delete_may_drop_all
@@ -486,13 +400,9 @@ The second guard covers the bottom-level hard-delete shortcut, where a key whose
 /// masking them for readers at or above `delete_seq` — have to survive.
 ```
 
-A reader boundary is either a live snapshot sequence or a retention anchor, and one predicate checks both, because a fork anchor and a snapshot sequence are the same kind of object with different lifetimes. One is durable and one is transient, and compaction has no reason to care which.
+One predicate checks both boundaries, because a fork anchor and a snapshot sequence are the same kind of object with different lifetimes. One is durable, one is transient, and compaction has no reason to care which.
 
-### Racing a fork against a compaction {#pin-races}
-
-Anchors are durable, but they appear concurrently, and that combination is where I lost the most time. A compaction job that has been merging happily for a while may already have discarded a version that an anchor published thirty milliseconds ago now requires, and a discarded version cannot be un-discarded.
-
-The protocol is to sample the anchor set when the job is created, re-check it under the publication lock, and refuse the output if anything appeared in between:
+That leaves the race, where I lost the most time. Anchors are durable but they appear concurrently, and a job that has been merging for a while may already have discarded a version that an anchor published thirty milliseconds ago now needs. A discarded version cannot be un-discarded. So the job samples the anchor set when it starts, re-checks it under the publication lock, and refuses its output if anything appeared in between:
 
 ```rust
 // src/branch.rs
@@ -507,18 +417,122 @@ pub(crate) fn appeared_since(&self, sampled: &Self) -> Option<u64> {
 
 [[SVG:skv-pin-race]]
 
-The asymmetry runs one way on purpose. An anchor that appeared means refuse, with `Error::CompactionPinRaced { unsampled_anchor }`; the output is discarded and the inputs stay live for the next cycle. An anchor that vanished means publish anyway, since the job simply kept more than it needed to. The fork always wins this race, because a fork is a user-visible operation with a durable commit point and a compaction is background work that can be run again in five minutes.
+When the job refuses, the output is thrown away, the inputs stay live for the next cycle, and `CompactionPinRaced` names the anchor the job never sampled. The fork always wins this race, because a fork is a user-visible operation with a durable commit point and a compaction is background work that can run again in five minutes.
 
-The same discipline applies on the merge side. `record_merge_edge` holds the level manifest read guard across its catalog publication, because the edge becomes a retention anchor the instant it lands, and `fork_branch` holds the same read guard across its own publish so compaction can't raise the retention floor underneath it. Whichever of the two publishes second sees the other and fails closed.
+Recording a merge edge takes the same precaution from the other side. It holds a read lock on the level manifest across its catalog write, because the moment that edge lands it becomes another sequence compaction must preserve. Forking holds the same lock across its own write. Whichever publishes second sees the other and refuses.
 
-`compaction_pin_races` counts these refusals. A few are normal. A lot means you are forking against heavy compaction, and the discarded merge work is real work somebody's disk did for nothing.
-## Diff and merge {#merge}
+The engine counts these refusals (`compaction_pin_races`). A few are normal. A lot means you are creating branches against heavy compaction, and each refusal is merge work your disk did and threw away.
 
-### Diff {#diff}
+## The read path {#read-path}
 
-A branch's own component set holds only rows it wrote, so scanning that set costs what the diff costs instead of what the data costs, and no change journal is needed to make it cheap. That is the one place in this design where something came out cleaner than I expected.
+A branch owns only what it wrote. Everything else it can see belongs to an ancestor, and it may only see the part of that ancestor sitting below its anchor. So a read consults several component sets, with a different visibility rule for each.
 
-Then detach spoils it:
+A snapshot here is therefore a stack of layers walked nearest-first, each carrying its own cap:
+
+```rust
+// src/snapshot.rs — Snapshot::new_owned
+let mut cap = seq_num;
+for (branch, generation, fork_seq) in chain {
+	cap = cap.min(fork_seq);
+	layers.push(SnapshotLayer { owner: BatchOwner { branch, generation }, runtime: ..., cap });
+}
+```
+
+Walk the parent chain nearest-first, narrowing the cap as you go, and a layer's cap comes out as `min(snapshot seq, every fork anchor on the path to that ancestor)`. It narrows and never widens.
+
+That stack gets used in two shapes. A point read takes one layer at a time and finishes it before touching the next: active memtable, then immutable memtables newest-first, then L0 across every overlapping table, then L1 and below by binary search. Each layer seeks at its own cap instead of the snapshot sequence, and the first visible version ends the read.
+
+[[SVG:skv-read-walk]]
+
+A tombstone ends it just as firmly. A delete in a nearer layer answers "absent" instead of stepping aside to let an ancestor answer, so a branch can delete a row it never physically held.
+
+The cap reaches the two kinds of component by two routes. In a memtable it is a comparison: the walk lands on a key's newest version and steps down through the older ones until it reaches one at or below the cap. In an SSTable there is no comparison, because the cap is built into the seek key, and internal keys sort by user key ascending and sequence descending. A version above the cap sorts ahead of the seek target, so it is never read.
+
+[[SVG:skv-cap-seek]]
+
+A range scan can't work that way, because it yields one ordered stream instead of one answer. Every layer's iterator is capped on its own and only then merged:
+
+```rust
+// src/snapshot.rs
+// Every iterator of this layer is wrapped in a SeqCappedIterator
+// BEFORE the merge: per-layer fork caps cannot be expressed by
+// the merged stream's global snapshot filter.
+```
+
+Why can't the filter go after the merge? Within one key, versions arrive sequence-descending, and a capped iterator walks past a key's above-cap versions down to its first visible one. A filter placed after the merge is consulted too late. By then a different layer's row has already won the key, and the row that leaks through is the answer the reader receives.
+
+[[SVG:skv-cap-before-merge]]
+
+Run it both ways and look at the rows that leak through in the second configuration. They're correctly ordered, they sit below the snapshot's own sequence, and nothing about them looks wrong. Their one defect is which layer they came from, and once the streams interleave, that information is gone.
+
+[[WIDGET:skv-per-layer-caps]]
+
+## Fork, diff and merge {#operations}
+
+### Forking a branch {#fork}
+
+When you fork you have to say where, and that number becomes the branch's anchor. It goes into the catalog, so it outlives every reader and every restart. There are three ways to name it:
+
+```rust
+// src/branch.rs
+pub enum ForkPoint {
+	/// The parent's visible head at the instant of the fork, established by
+	/// draining the commit pipeline under the write fence.
+	Head,
+	/// A specific sequence, which must be at or below the drained head and at
+	/// or above the parent's retention floor.
+	AtVersion(u64),
+	/// The highest sequence committed at or before this timestamp, resolved
+	/// exactly or refused (`Error::TimestampBelowHorizon`).
+	AtTimestamp(u64),
+}
+```
+
+All three land on an exact sequence or they fail. Forking at head includes rows the parent has committed but not yet flushed, because the child resolves the parent's live state, memtables and all, instead of a set of files on disk. So nothing has to be flushed for a fork to be correct. I had assumed I would need to build that.
+
+[[SVG:skv-fork-anchor]]
+
+Fork a branch off a branch and the anchors stack, each link contributing its own cap, so your effective ceiling is the lowest on the path. A grandchild can never see more of its grandparent than its parent could. That falls out of taking a minimum, and no check enforces it.
+
+The fork itself is one publication to the catalog, and it copies no data:
+
+```rust
+// src/lsm.rs — fork_branch
+/// The protocol is one durable step. Under the branch-op mutex: fence
+/// writes, drain the commit pipeline so the visible head is exact, resolve
+/// the fork sequence, release the fence, then publish ONE catalog version
+/// naming the child, its parent link and its anchor. That publish is the
+/// commit point — before it nothing durable mentions the child, after it the
+/// child is fully readable with no further work, because its view is
+/// computed from the parent's live state (design §3.2).
+```
+
+[[SVG:skv-fork-protocol]]
+
+Fencing refuses new writes into the queue; draining waits for the writes already inside it to land. Without the drain, forking at head picks a number with unfinished commits on both sides of it, and the child's view sits at neither the head nor any point you could name. The wait has a deadline, and missing it gives a retryable `ForkFenceTimeout`.
+
+Publishing then checks the ancestor chain against the depth budget, `MAX_VIEW_DEPTH = 64`, and asks whether the parent can still answer at the resolved sequence:
+
+```rust
+// src/branch.rs
+/// Either the cap is at or above the retention floor — no key has lost a
+/// version that a view up there would need — or the cap is one of the pinned
+/// anchors, where compaction preserved the answer on purpose. Any other cap
+/// below the floor reads whatever happened to survive, which is a guess.
+pub(crate) fn view_is_complete_at(&self, cap: u64, retained_floor: u64) -> bool {
+	cap >= retained_floor || self.anchors.contains(&cap)
+}
+```
+
+So a historical fork gets refused instead of approximated. Ask for a point older than anything the parent still holds and you get `BelowRetentionFloor`, carrying what you asked for and how far back the parent can go. Ask for a chain deeper than 64 and you get `ViewDepthExceeded`; detaching a branch along the chain shortens it. Two more refusals have nothing to do with retention. You cannot fork a parent at a point before the parent existed. And a retried timestamp fork is resolved from scratch, so if that timestamp now maps to a different sequence, you get a refusal instead of a stale receipt.
+
+The fence is store-wide. It stops writers with no connection to the branch being forked or to its parent, because one global clock means one global point everything queues through. The engine tracks total drain time and the number of forks, and the ratio is the average pause each writer absorbed on somebody else's behalf (`fork_drain_nanos` over `forks`). Create branches in a loop against a busy store and that ratio will explain your p99.
+
+### Diffing a branch {#diff}
+
+A branch's own component set holds only rows it wrote, so scanning that set costs what the diff costs instead of what the data costs. No change journal is needed.
+
+Detach spoils it:
 
 ```rust
 // src/diff.rs
@@ -528,19 +542,17 @@ Then detach spoils it:
 //! it. That filter is the difference between a diff and a lie.
 ```
 
-So a diff reads through `Snapshot::own_only` — the branch's own memtables and level set with no ancestor layers — and then still filters `seq > base`. Before any detach has happened that filter looks like dead weight, since every owned row is above the anchor by construction. Detach is the reason it's there: it copies inherited rows into the branch's own tables at their original, below-anchor sequences, and without the filter those inherited rows would show up as things the branch had changed.
+So a diff reads through `Snapshot::own_only`, the branch's own memtables and level set with no ancestor layers, and then still filters `seq > base`. Before any detach that filter looks like dead weight, since every owned row is above the anchor by construction. Detach is why it's there. It copies inherited rows into the branch's own tables at their original, below-anchor sequences, and without the filter those rows would show up as changes the branch had made.
 
 [[SVG:skv-diff]]
 
 The diff includes tombstones, because a delete is a change. It emits one entry per key, with the branch's newest write winning.
 
-### A base that moves {#merge-base}
+### Merging a branch {#merge}
 
 A three-way merge needs the value at the base, the value on the source now, and the value on the target now, where the base is the last state the two branches agreed on.
 
-The obvious candidate for that base is the fork anchor, and it's right for the first merge and wrong for every one after it, because once you have merged, the two branches have agreed on something newer than where they diverged. Leave the base at the fork anchor and a second merge re-offers everything the first one already applied, re-raising conflicts that were settled a week ago.
-
-So the base is three sequences:
+The obvious candidate is the fork anchor. It is right for the first merge and wrong for every one after it, because once you have merged, the two branches have agreed on something newer than where they diverged. Leave the base at the fork anchor and a second merge re-offers everything the first one applied. So the base is three sequences:
 
 ```rust
 // src/merge.rs
@@ -559,27 +571,27 @@ pub(crate) struct EffectiveBase {
 
 [[SVG:skv-merge-base]]
 
-Why can't the target's head at the last merge serve as the base? Because merging into a target never mutates the source, so values that existed only on the target at that edge were never part of source history at all. Treat the target-at-edge state as the common base and a later source edit to one of those keys looks uncontested, gets applied, and overwrites a target value the source never knew existed. The base side is therefore the source snapshot at `source_through`, and `target_at` is kept as durable edge history and reported to callers without ever being a base value. For the same reason a scan probe has to cover target writes from `fork_at` rather than from the last edge, or it misses target-only writes that predate it.
+Why can't the target's head at the last merge serve as the base? Merging into a target never mutates the source, so values that existed only on the target at that edge were never part of source history. Treat the target-at-edge state as the common base and a later source edit to one of those keys looks uncontested, gets applied, and overwrites a target value the source never knew existed.
+
+Stop recording the edge and merge twice to see it. Merge, write on the target, merge again, and the second merge re-offers the first one's work and re-raises a conflict that was already settled.
+
+[[WIDGET:skv-moving-base]]
 
 Absence is treated as a value all the way through the classification, so delete-versus-delete resolves and delete-versus-modify conflicts, with neither needing a special case.
 
 [[SVG:skv-merge-verdicts]]
 
-Some merges are refused outright. A merge is accepted only into the branch the source was forked from, and siblings get `BranchesUnrelated`, because no common base was ever recorded for them and inventing one would be a guess dressed up as a merge. A stale-generation edge is discarded too, since a source that was deleted and recreated under the same id shares nothing with its predecessor.
+When both sides changed the same key to different things, the merge stops and reports how many keys are in that state (`MergeConflicts`). Pick a blanket strategy, supply a function that decides per key, or go and look at them.
 
-Validation checks two retention floors, the target's and the source's, with the second gated on `source_through > fork_at`. A first merge's source-side base is the inherited fork view, whose parent-side anchor was already validated at fork time, and a source can't own rows at or below its own birth.
+Some merges are refused earlier. A merge is only accepted into the branch the source was forked from, so two siblings get `BranchesUnrelated`: no base was ever recorded between them, and inventing one would be a guess dressed up as a merge. An edge pointing at a branch deleted and recreated under the same name is discarded on the same grounds. And a merge checks that both sides can still be read back as far as the base needs, which for a first merge the fork already passed.
 
-Two successive merges with the promotion edge switched off is the fastest way to see why any of this is necessary. Turn it off, merge, write on the target, then merge again, and the second merge re-offers the first one's work.
+"Has the target changed since the base?" can be answered one key at a time, or in a single pass over everything the target has written. Which is cheaper depends on how many keys the merge touches. So the engine counts the source's changes and switches between the two at `SCAN_PROBE_THRESHOLD = 256` keys. A test asserts both approaches reach the same verdict on the same input, so a badly chosen threshold costs time and never correctness.
 
-[[WIDGET:skv-moving-base]]
+There is a fast path under both. If no write has landed on the target since the last merge, its sequence number alone proves nothing changed, and planning reads no values.
 
-### How a merge executes {#merge-execution}
+Merges go through the same commit path as any other write, where conflict detection, the WAL and sequence allocation already live. Previewing a merge runs the same classification code as performing one, and if the target moves in between, the apply refuses.
 
-The question "has the target moved since the base?" can be answered per key by point-reading the read stack, or once by walking the target's own changes, and which is cheaper depends entirely on how many keys the merge touches. So the choice is made at `SCAN_PROBE_THRESHOLD = 256`, and the two probes' verdict-equivalence is covered by a test, which means a badly chosen threshold costs you time and never correctness. Preflight counts the source diff sequentially and switches at the same threshold instead of point-probing every changed key, and there's a fast path underneath both: a target nobody has touched matches the base on sequence alone, so planning that merge reads no values at all.
-
-Merges go through the ordinary commit path. Conflict detection, the WAL and sequence allocation are all handled there already, and there is no privileged bulk-apply path sitting alongside it to keep correct separately. `preview_merge_into` shares the classification code with the real thing, so a preview can't drift from what it previews.
-
-Atomicity is the part people assume and shouldn't. Writes are bounded at the memtable size, and `MergeOutcome::chunks` is the contract:
+A merge cannot write more in one transaction than fits in a memtable, so a big enough merge is split into several:
 
 ```rust
 // src/merge.rs
@@ -588,11 +600,11 @@ Atomicity is the part people assume and shouldn't. Writes are bounded at the mem
 /// have left the earlier ones applied.
 ```
 
-Zero means there was nothing to write, one means one transaction, and more than one means the merge was resumable rather than atomic. Nothing you pass to the call decides which of those you get — the size of the data decides. So if atomicity matters to you, read `chunks` afterwards and don't infer it from the fact that the call returned successfully. A single entry above the budget is refused up front with `MergeTooLarge`.
+Nothing you pass to the call decides which you get; the size of the data decides. So read the count afterwards if atomicity matters. And if a single key's value is too big for one transaction, splitting cannot help, so the merge is refused up front with `MergeTooLarge`.
 
 [[WIDGET:skv-merge-chunks]]
 
-One ordering rule governs the whole operation: data commits first, edge second.
+One ordering rule governs the operation: data commits first, edge second.
 
 ```rust
 // src/lsm.rs
@@ -604,43 +616,43 @@ One ordering rule governs the whole operation: data commits first, edge second.
 
 [[SVG:skv-merge-commit-order]]
 
-One order fails loudly and idempotently, the other loses writes quietly. That difference makes the ordering a correctness property. A scoped `merge_range` records no edge at all, on purpose, because a partial apply hasn't earned the claim that the source is fully merged.
-
-## What a branch costs {#cost}
-
-Three costs, and I can describe the shape of each and the metric that would show it, which is not the same as having measured any of them.
-
-**Reads amplify with fork depth.** A chain *d* deep means *d* layers, each contributing its own capped iterators into one merge, so fan-in grows with depth and with each layer's live component count. `MAX_VIEW_DEPTH = 64` bounds it, and 64 is a budget somebody chose rather than a physical limit — a 64-layer merge is entirely legal, and slow, and I would rather find out how slow on a test host than in a store somebody depends on.
-
-**Space grows with pinned versions.** This is the cost that accumulates while you aren't looking. For a non-versioned parent it comes to roughly one extra version per anchor per touched key. `pin_retained_versions_total` counts versions that completed compactions kept solely because an anchor needed them, so it measures retention work rather than live bytes on disk, and it's the number that tells you whether your branches are costing you anything.
-
-**Runtime state is allocated lazily.** One WAL, one commit pipeline, one clock and one table-id allocator are shared by the whole store, while memtables and level sets are per branch. Those arrive on a branch's first write instead of at the fork, so an idle branch costs no arena at all.
-
-[[SVG:skv-branch-runtimes]]
-
-One caveat if you're sizing a host. The write buffer is a `write_buffer_soft_limit`, and the "soft" is load-bearing: rotation doesn't release an immutable arena until its flush completes, and an oversized batch may need an arena larger than the configured number. A hard cap would need admission and back-pressure accounting across active, immutable and in-flight flush memory, which is a different allocator design and not a renamed constant.
+A merge restricted to a range of keys (`merge_range`) records no edge: having applied part of a branch does not entitle anything to claim the two branches now agree.
 
 ### Detach and revert {#detach-revert}
 
-The ceiling model has one structural weakness: a branch that outlives its usefulness keeps taxing its parent through the retention pin, forever, for as long as it exists. Two operations exist to get out of that.
+The ceiling model has one structural weakness. A branch that outlives its usefulness keeps taxing its parent through the retention pin, for as long as it exists.
 
-Detach materialises the inherited view into a single SSTable placed below the branch's own levels, then clears the parent link, which releases the parent's retention pin and lets it compact freely again. The price is a copy of everything the branch was inheriting, so detach is forking's trade run backwards, and it's the right answer for exactly one case: the branch that turned out to be permanent.
+Detach copies the inherited view into a single SSTable placed below the branch's own levels, then clears the parent link, which releases the parent's pin and lets it compact freely again. The price is a copy of everything the branch was inheriting, so detach is forking's trade run backwards, and it is the right answer for the branch that turned out to be permanent.
 
 [[SVG:skv-detach]]
 
-The copy runs before `catalog_publish` is taken, and the owner is re-validated afterwards in case it got fenced while the copy was running. Detach is idempotent as well, so if the parent link is already gone it returns successfully instead of doing all that work twice.
+The copy happens before the catalog lock is taken, and the branch is re-checked afterwards in case it was deleted mid-copy. Detach is idempotent: if the parent link is already gone it returns successfully instead of doing the work twice.
 
-Revert writes compensating values forward instead of rewriting anything. It diffs the branch's own writes in range, reads the inherited value at the anchor, skips keys that are already equal, and writes the rest back through an ordinary transaction. History stays append-only throughout: the restored values are new writes at new sequences, and nothing that could read the old values loses that ability.
+Revert writes compensating values forward instead of rewriting anything. It diffs the branch's own writes in range, reads the inherited value at the anchor, skips keys already equal, and writes the rest through a transaction. History stays append-only: the restored values are new writes at new sequences, and nothing that could read the old values loses that ability.
 
-One API name is worth double-checking before you use it, because I have got this wrong in my own tests. `create_branch` is not a fork — it makes an empty branch with no parent and no inherited view. `fork_branch` is the one that takes a `ForkPoint`.
+`create_branch` does not fork anything. It makes an empty branch with no parent and nothing inherited, and `fork_branch` is the one that takes a `ForkPoint`. I have got that wrong in my own tests.
+
+## What a branch costs {#cost}
+
+Three costs. I can describe the shape of each and the metric that would show it, which is not the same as having measured any of them.
+
+Reads amplify with fork depth. A chain three deep means every read consults all three branches, so the work grows with the depth of the chain and with how many memtables and tables each branch on it has live. It does not grow with the number of branches: a thousand branches forked straight off main cost one extra layer each, a chain of ten costs ten. `MAX_VIEW_DEPTH = 64` caps the chain, and somebody picked 64; it is not a physical limit. Past it a fork is refused. Just short of it, reads walk 64 layers, legal and slow.
+
+Space grows with pinned versions. For the common case it comes to roughly one extra version per branch, per key the parent has overwritten since the fork. The engine keeps a running count of versions its compactions held onto solely because some branch needed them (`pin_retained_versions_total`). It only ever goes up, counting from process start, so the signal is how fast it climbs.
+
+Runtime state is allocated lazily. One WAL, one commit queue, one counter, one snapshot tracker and one table-id allocator are shared by the store however many branches exist. A memtable and a level set are per branch, and both arrive on the branch's first write, so an idle branch costs a catalog record and nothing else.
+
+[[SVG:skv-branch-runtimes]]
+
+A thousand idle branches cost a thousand records, those same shared runtimes, and whatever their anchors pin in the parent.
 
 ---
 
-So: a fork writes one catalog record and no data, at the price of a brief store-wide fence. Throwing a branch away reclaims a component set and retires a tombstone, deleting no rows, because the branch was never in the keys to begin with. Asking what changed reads the branch's own components filtered by sequence. Asking for an exact point in the past gives you either that point or `TimestampBelowHorizon`.
+So: a fork writes one catalog record and no data, at the price of a brief store-wide fence. Throwing a branch away reclaims a component set and clears a marker, deleting no rows, because the branch was never in the keys. Asking what changed reads the branch's own components filtered by sequence. Asking for an exact point in the past gives you that point or a refusal naming how far back the store can go.
 
-The bill lands on compaction, which now has to be handed a durable set of sequences it may not forget. I knew roughly where it would land when I picked the design. What I didn't anticipate was how much of the work turned out to be about the *timing* of that instruction rather than its contents — sampling the anchor set before merging, re-checking it under the publication lock, deciding which side of a race is allowed to lose.
+The bill lands on compaction, which now has to be handed a durable set of sequences it may not forget. I knew roughly where it would land when I picked the design. What I did not anticipate was how much of the work was about the *timing* of that instruction rather than its contents: sampling the anchor set before merging, re-checking it under the publication lock, deciding which side of a race is allowed to lose.
 
-What I want next is numbers. `pin_retained_versions_total` against a realistic churn of sandbox branches would tell me whether the per-anchor pin holds its shape at tens of branches or quietly degrades into the range pin under load, and `fork_drain_nanos` under a write-heavy workload would tell me whether the store-wide fence is a footnote or a problem. Until then, the shape of the cost is understood and its size isn't.
+What I want next is numbers. A realistic churn of sandbox branches would show whether one version per anchor holds up at tens of branches or turns into the whole range under load. Timing the fence against a write-heavy workload would show whether that store-wide pause is a footnote or a problem. Both counters exist. I have not pointed them at anything real.
 
 ## References {#references}
 

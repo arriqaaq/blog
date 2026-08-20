@@ -6,6 +6,7 @@ slug: membership
 date: 2026-07-14
 ogImage: mem-timeline
 byline: A walkthrough of cluster membership — the underlying theory and the protocols (SWIM, Serf, Lifeguard, Rapid) — plus reconfiguration, the separate problem of changing the voter set — with each mechanism running live on the page.
+made: assisted
 ---
 
 Consider a cluster of three servers. One of them stops answering.

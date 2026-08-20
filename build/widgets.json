@@ -62,5 +62,6 @@
   "skv-per-layer-caps": { "g": "SKVPerLayerCaps", "t": "Where the cap is applied", "s": "per layer before the merge, or once after it" },
   "skv-anchor-policy": { "g": "SKVAnchorPolicy", "t": "What compaction must keep", "s": "place forks, then try each retention policy" },
   "skv-moving-base": { "g": "SKVMovingBase", "t": "A merge base that moves", "s": "fork_at · source_through · target_at" },
-  "skv-merge-chunks": { "g": "SKVMergeChunks", "t": "Atomic, or resumable", "s": "chunks depends on the size of the data" }
+  "skv-merge-chunks": { "g": "SKVMergeChunks", "t": "Atomic, or resumable", "s": "chunks depends on the size of the data" },
+  "skv-fork-lifecycle": { "g": "SKVForkLifecycle", "t": "What a fork copies, and where the answer comes from", "s": "one catalog record · the row moves, the answer does not" }
 }

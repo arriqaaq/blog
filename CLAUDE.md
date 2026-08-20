@@ -28,8 +28,10 @@ warnings or a non-zero exit, a `[[WIDGET:…]]`/`[[SVG:…]]` token points at so
 
 ## Authoring a post (see `content/README.md` for the full reference)
 
-One file per post: `content/<slug>.md`, with a `---` frontmatter block (`title` required; optional
-`dek`, `eyebrow`, `slug`, `date`, `byline`, `draft`) then a Markdown body. In the body:
+One file per post: `content/<slug>.md`, with a `---` frontmatter block (`title` and `made` required;
+optional `dek`, `eyebrow`, `slug`, `date`, `ogImage`, `order`, `byline`, `draft`) then a Markdown
+body. `made:` is the AI-disclosure badge under the byline — `assisted` ("Written with AI assistance")
+or `hand` ("Written without AI"); omitting it is a build warning, which fails the build. In the body:
 
 - **Prose** is plain Markdown. `##` = top-level sections (these become the table of contents); `###` =
   subsections. `## Heading {#slug}` sets a stable anchor id (omit `{#…}` to auto-slugify). Code in
