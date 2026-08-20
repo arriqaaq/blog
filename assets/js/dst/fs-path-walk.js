@@ -87,7 +87,7 @@
 
     function build() {
       root.innerHTML = K.container({
-        title: 'Resolving a path is a walk, not a lookup',
+        title: 'Resolving a path, one component at a time',
         sub: 'component by component — and the dentry cache is what makes it cheap',
         controls: controls(), viewBox: `0 0 ${W} ${H}`, uid,
         stats: [{ id: 'comp', label: 'components' }, { id: 'hits', label: 'dcache hits' },

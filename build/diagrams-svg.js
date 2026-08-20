@@ -558,7 +558,7 @@ module.exports["sim-first"] = { title: "Simulation first: the whole cluster in o
 // --- agent-filesystem post ---
 
 module.exports['fs-stack'] = {
-  title: 'Every door leads to the same kernel; only the store speaks to the database',
+  title: 'Five surfaces, one kernel, one crate that reaches the database',
   type: 'svg',
   body: svg('0 0 720 330',
     box(18, 18, 124, 52, C.blue, 'Rust SDK', ['embedded']) +
@@ -566,7 +566,6 @@ module.exports['fs-stack'] = {
     box(298, 18, 124, 52, C.blue, 'mount', ['POSIX / FUSE']) +
     box(438, 18, 124, 52, C.blue, 'CLI', ['inspect · publish']) +
     box(578, 18, 124, 52, C.blue, 'run', ['confined exec']) +
-    label(360, 98, 'translations, never second implementations', 'middle', 0.6) +
     box(110, 112, 500, 52, C.purple, 'semantic kernel', ['workspaces · publication · history — one implementation of the rules']) +
     box(110, 190, 500, 48, C.green, 'surrealfs-store', ['the only crate that speaks to the database']) +
     box(110, 264, 500, 48, C.gray, 'embedded SurrealDB → SurrealKV', ['records · transactions · RELATE edges · indexes']) +
@@ -590,7 +589,7 @@ module.exports['fs-forgets'] = {
 };
 
 module.exports['fs-root-anatomy'] = {
-  title: 'A state root: two content-addressed halves, one name for everything',
+  title: 'A state root: the namespace half and the key-value half',
   type: 'svg',
   body: svg('0 0 720 327',
     box(250, 20, 220, 56, C.purple, 'state root', ['digest = H( ns , kv )']) +
@@ -628,7 +627,7 @@ module.exports['fs-publish-steps'] = {
 };
 
 module.exports['fs-used-not-used'] = {
-  title: 'What we asked of SurrealDB — and what we deliberately did not',
+  title: 'What the database was asked for, and what it was not',
   type: 'html',
   body: `<table class="cmp"><thead><tr><th>SurrealDB feature</th><th>Used?</th><th>Why</th></tr></thead><tbody>
     <tr><td>Schemaful tables + <code>ASSERT</code></td><td>yes</td><td>malformed records refused at the boundary</td></tr>
@@ -644,7 +643,7 @@ module.exports['fs-used-not-used'] = {
 };
 
 module.exports['fs-anatomy'] = {
-  title: 'The four structures — and the one that holds no name',
+  title: 'What each of the four structures holds',
   type: 'svg',
   body: svg('0 0 720 330',
     box(20, 22, 150, 74, C.gray, 'superblock', ['the filesystem itself:', 'size, block size,', 'where the tables start']) +
@@ -681,7 +680,7 @@ module.exports['fs-journal'] = {
 };
 
 module.exports['fs-storage-layers'] = {
-  title: 'Where a byte actually ends up',
+  title: 'Where a byte ends up',
   type: 'svg',
   body: svg('0 0 720 340',
     box(20, 18, 300, 56, C.blue, 'the file you wrote', ['split into fixed 256 KiB pieces']) +
@@ -709,19 +708,38 @@ module.exports['fs-storage-layers'] = {
 
 module.exports['fs-component-swap'] = {
   title: 'Each piece of a filesystem, and what replaced it',
-  type: 'html',
-  body: `<table class="cmp"><thead><tr><th>A traditional filesystem</th><th>What it does</th><th>What I built instead</th></tr></thead><tbody>
-    <tr><td>superblock</td><td>names the filesystem and where its tables start</td><td>a <code>repository</code> row plus a <strong>state root</strong> digest</td></tr>
-    <tr><td>inode</td><td>metadata + where the data lives</td><td>an entry inside a content-addressed directory node — <strong>there is no inode table</strong></td></tr>
-    <tr><td>inode number</td><td>the file's identity</td><td>nothing — identity is the <strong>path</strong>; inode numbers exist only to satisfy the kernel</td></tr>
-    <tr><td>directory entry</td><td>maps a name to an inode number</td><td>a name→entry pair inside an immutable directory node</td></tr>
-    <tr><td>data blocks</td><td>the bytes, at fixed offsets on a device</td><td>content-addressed chunks, named by the hash of their own bytes</td></tr>
-    <tr><td>block allocator + free bitmap</td><td>decides where new bytes go</td><td><strong>deleted</strong> — content addressing chooses the name, and the engine chooses the placement</td></tr>
-    <tr><td>journal</td><td>makes a multi-block update crash-safe</td><td>one database transaction, guarded by an expected-head compare-and-swap</td></tr>
-    <tr><td><code>fsck</code></td><td>scans and repairs a damaged filesystem</td><td>recompute the root digest and compare — the state either re-derives or it doesn't</td></tr>
-    <tr><td>mtime</td><td>a timestamp stored in the inode</td><td>derived from the commit that last wrote the path</td></tr>
-    <tr><td>overwrite in place</td><td>destroys the previous bytes</td><td>a new immutable version, with the old one still addressable</td></tr>
-    </tbody></table>`,
+  type: 'svg',
+  // Ten POSIX mechanisms converge onto four database ones, and three have no replacement at all.
+  // The convergence is the point a table could not make, so the arrows carry it and the neon
+  // marks the row that surprised me: three mechanisms simply have nowhere to go.
+  body: svg('0 0 720 360', (() => {
+    let o = '';
+    const LX = 20, LW = 200, RX = 336, RW = 260, H = 22, DH = 40;
+    o += label(20, 15, 'a traditional filesystem', 'start', 0.5);
+    o += label(700, 15, 'what replaced it', 'end', 0.5);
+
+    const groups = [
+      [['superblock', 'fsck'], 'state root', 'one digest names the whole state'],
+      [['inode', 'directory entry'], 'directory nodes', 'content-addressed and immutable'],
+      [['data blocks', 'overwrite in place'], 'chunks', 'named by the hash of their bytes'],
+      [['journal', 'mtime'], 'one transaction', 'guarded by an expected-head CAS'],
+      [['inode number', 'block allocator', 'free bitmap'], 'no replacement',
+        'the path is the identity; the engine places bytes', true],
+    ];
+
+    let y = 28;
+    for (const [srcs, dest, sub, hot] of groups) {
+      const ys = srcs.map((_, i) => y + i * 26);
+      const dy = (ys[0] + ys[ys.length - 1] + H) / 2 - DH / 2;   // centre the target on its sources
+      for (let i = 0; i < srcs.length; i++) {
+        o += obox(LX, ys[i], LW, H, srcs[i]);
+        o += arrow(LX + LW + 5, ys[i] + H / 2, RX - 5, dy + DH / 2, 'gray');
+      }
+      o += obox(RX, dy, RW, DH, dest, sub, { hot: !!hot });
+      y = ys[ys.length - 1] + 26 + 8;
+    }
+    return o;
+  })()),
 };
 
 module.exports['fs-fuse-ops'] = {
@@ -1388,7 +1406,7 @@ module.exports['skv-what-a-branch-costs'] = {
 };
 
 module.exports['skv-diff'] = {
-  title: 'What a branch’s own components hold after a detach',
+  title: 'A branch’s own rows, above and below its anchor',
   type: 'svg',
   body: svg('0 0 720 190', (() => {
     let o = '';

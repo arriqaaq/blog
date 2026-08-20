@@ -248,7 +248,9 @@ function renderPost(srcFile) {
     : '';
 
   const words = countWords(sections);
-  const tocHtml = toc.map((t, i) => `<li><span class="toc-n">${String(i + 1).padStart(2, '0')}</span><a href="#${t.id}">${esc(t.heading)}</a></li>`).join('\n');
+  // t.heading is inner HTML from marked with tags stripped, so it is already
+  // entity-escaped — esc() here would double-escape an apostrophe or ampersand.
+  const tocHtml = toc.map((t, i) => `<li><span class="toc-n">${String(i + 1).padStart(2, '0')}</span><a href="#${t.id}">${t.heading}</a></li>`).join('\n');
   const scripts = [...state.usedWidgets].sort().map((n) => `<script src="../assets/js/dst/${n}.js"></script>`).join('\n');
   const inits = state.mounts.map((m) => `    try { if(window.${WIDGETS[m.name].g}) ${WIDGETS[m.name].g}.init('${m.id}'); } catch (e) { console.error('${m.name} (${m.id}) failed:', e); }`).join('\n');
 

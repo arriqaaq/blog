@@ -99,7 +99,7 @@
 
     function build() {
       root.innerHTML = K.container({
-        title: 'Where a file’s bytes actually are', sub: 'ext2 indirect pointers vs ext4 extents — the same file, both ways',
+        title: 'Where a file’s bytes are recorded', sub: 'ext2 indirect pointers vs ext4 extents — the same file, both ways',
         controls: controls(), viewBox: `0 0 ${W} ${H}`, uid,
         stats: [{ id: 'fb', label: 'file blocks' }, { id: 'mb', label: 'metadata blocks' },
           { id: 'ex', label: 'extents' }, { id: 'lk', label: 'last-block lookups' }],

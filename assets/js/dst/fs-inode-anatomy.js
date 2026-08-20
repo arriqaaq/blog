@@ -76,10 +76,10 @@
 
     function build() {
       root.innerHTML = K.container({
-        title: 'A name is not a file', sub: 'directory entries · inodes · data blocks — three separate things',
+        title: 'The inode holds no name', sub: 'directory entries · inodes · data blocks — three separate things',
         controls: controls(), viewBox: `0 0 ${W} ${H}`, uid,
         stats: [{ id: 'names', label: 'names' }, { id: 'inodes', label: 'inodes' }, { id: 'links', label: 'link count' }],
-        cap: 'An inode holds metadata and block pointers — never a name. Names live in directory entries, '
+        cap: 'An inode holds metadata and block pointers, and no name. Names live in directory entries, '
            + "which is why a file can have two of them and why deleting one doesn't delete the file.",
       });
       c = K.palette();

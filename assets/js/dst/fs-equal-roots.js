@@ -87,7 +87,7 @@
         title: 'Two orders, one root digest', sub: 'equal state ⟹ equal name · verify a restore = recompute one hash',
         controls: controls(), viewBox: `0 0 ${W} ${H}`, uid,
         stats: [{ id: 'steps', label: 'steps' }, { id: 'equal', label: 'roots equal' }, { id: 'orders', label: 'orders differ' }],
-        cap: 'The root names the state, not the story. Two histories that end in the same bytes end in the '
+        cap: 'A root names the state it reached, not the route it took to get there. Two histories that end in the same bytes end in the '
            + 'same digest — and one flipped bit is unmissable.',
       });
       c = K.palette();

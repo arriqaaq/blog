@@ -116,6 +116,21 @@ in one short paragraph at the end of the intro, not the beginning.
   be one `##` with four `###` children. `build/build.js` builds the TOC from `<h2>` only, and gives
   **every** heading level an id, so demoting a section to `###` shortens the TOC while keeping its
   `{#anchor}` and every inbound link.
+- **Aim for about six `##` sections in a 10,000-word post.** The reference post is ~10,200 words in
+  six: `What's hard about Git?` · `Git without packfiles` · `GitHub and filesystems` · `Spokes and
+  Consistency` · `Continuity` · `Origin`. Exactly one is nested — `Continuity`, their own design,
+  ~4,200 words (40%) with five `###` children. Twenty-one flat `##` sections is the failure mode: a
+  127-word overview then carries the same TOC weight as an 870-word primer. Background-to-design runs
+  about 55/45.
+- **The design section opens by naming its primitive, not by announcing itself.** `Continuity` spends
+  a paragraph on "a write-ahead log, which we store in S3-compatible object storage" before its first
+  child. That is what an `##` lead is for; "this section covers…" is not.
+- **No standalone retrospective, appendix or limitations section.** The reference has none. A
+  trade-off goes where its mechanism is described ("trading bandwidth for CPU"). A section called
+  `What I got wrong` or `What the database gave me` should be dissolved into the sections that own
+  each fact. Dissolving is not deleting: every real caveat lands somewhere (see the last bullet).
+  The exception is an item that is only an *absence* — "no live queries", "no vector search" — which
+  is cut, because it carries no lesson.
 - **Sections open straight into their subject.** No bridge sentence describing what the section
   will do. In `content/dst.md`, 7 of 8 sampled section openings go straight in.
 - **One idea per section, and give the interesting failure room.** When several designs are being
@@ -125,9 +140,25 @@ in one short paragraph at the end of the intro, not the beginning.
 
 ### Headings
 
-Name what a reader is hunting for. `Reads: a stack of layers, each with its own ceiling` became
-`The read path`. `What an LSM tree actually is` became `How an LSM tree works` — "actually" is a tic.
-Avoid riddle headings (`Where the branch is not`) and abstract ones (`Refusal as a design stance`).
+**Bare nouns, one to four words.** The reference's are `Consensus` · `Replication` · `Compaction` ·
+`Scale` · `WAL as truth`. Name what a reader is hunting for and stop.
+
+Four patterns to write out of existence, all of them found in one post's twenty-one headings:
+
+| Pattern | Rejected | Instead |
+|---|---|---|
+| Colon-explainer | `Crash consistency: why journals exist` | `Journals` |
+| Appositive tail | `Path resolution, rebuilt` · `Inode numbers, demoted to presentation` | `The walk` · `Inode numbers` |
+| Sentence-as-heading | `History is a chain of names` · `One root names the whole state` | `Commits` · `The state root` |
+| Riddle | `The four structures, and the one that holds no name` · `Where the branch is not` | `Inodes and directory entries` |
+
+Also: **prefer the plain word to the abstract one.** `Who wrote this byte` beats `Provenance` even
+though the section is about provenance — the plain phrasing is what a reader would have asked. And
+`actually`/`really` in a heading is a tic: `What an LSM tree actually is` became `How an LSM tree
+works`.
+
+A heading with a count in it has to match the body. `Four surfaces` over a section that says "three
+translations" three times is a bug; either fix the count or drop it (`The surfaces`).
 
 ## 5. Numbers
 
